@@ -197,6 +197,9 @@ impl Codegen {
                 if is_builtin(&call.callee, "require_role") {
                     self.go_imports.insert("encoding/json".into());
                 }
+                if is_builtin(&call.callee, "require_field") {
+                    self.go_imports.insert("encoding/json".into());
+                }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
                 }
@@ -379,6 +382,17 @@ impl Codegen {
         Ok(s)
     }
 
+    fn is_db_exec(&self, expr: &Expr) -> bool {
+        if let Expr::Call(call) = expr {
+            if let Expr::FieldAccess(receiver, method) = call.callee.as_ref() {
+                if let Expr::Ident(alias) = receiver.as_ref() {
+                    return self.stdlib_aliases.contains(alias.as_str()) && method == "exec";
+                }
+            }
+        }
+        false
+    }
+
     fn gen_stmt(
         &self,
         stmt: &Stmt,
@@ -399,7 +413,10 @@ impl Codegen {
                     declared.insert(l.name.clone());
                 }
                 let expr = self.gen_expr(&l.value, ctx)?;
-                Ok(format!("{} {} {}", l.name, op, expr))
+                // db.exec returns (interface{}, error); when assigning to single var,
+                // prefix with _, to ignore the sql.Result
+                let prefix = if self.is_db_exec(&l.value) { "_, " } else { "" };
+                Ok(format!("{}{} {} {}", prefix, l.name, op, expr))
             }
             Stmt::LetMulti(l) => {
                 // Go exige ao menos um nome novo para :=; se todos já existem, usa =
@@ -788,6 +805,8 @@ impl Codegen {
             if let Expr::Ident(alias) = receiver.as_ref() {
                 let fn_name = if self.stdlib_aliases.contains(alias.as_str()) {
                     format!("{}_{}", alias, method)
+                } else if self.user_aliases.contains(alias.as_str()) {
+                    format!("{}_{}", alias, method)
                 } else {
                     method.clone()
                 };
@@ -823,7 +842,9 @@ impl Codegen {
             if let Expr::Spread(spread) = arg {
                 let map_expr = self.gen_expr(spread, ctx)?;
                 if let Some(params) = params {
-                    for (pname, pty) in params.iter() {
+                    // spread expands only remaining params (after already-provided args)
+                    let remaining = &params[out.len()..];
+                    for (pname, pty) in remaining.iter() {
                         let cast = match pty {
                             Type::Int => ".(int)",
                             Type::Float => ".(float64)",
