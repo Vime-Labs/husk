@@ -1,4 +1,5 @@
 use husk_parser::ast::*;
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashSet};
 
 #[derive(Debug)]
@@ -27,6 +28,8 @@ pub struct Codegen {
     user_aliases: HashSet<String>,
     /// alias de módulos stdlib: `alias.fn()` → `alias_fn()`
     stdlib_aliases: HashSet<String>,
+    /// Contador para nomes únicos de variáveis _huskCtx
+    ctx_var_counter: Cell<usize>,
 }
 
 impl Codegen {
@@ -35,10 +38,12 @@ impl Codegen {
             go_imports: BTreeSet::new(),
             user_aliases: HashSet::new(),
             stdlib_aliases: HashSet::new(),
+            ctx_var_counter: Cell::new(0),
         }
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, CodegenError> {
+        self.ctx_var_counter.set(0);
         for item in &program.items {
             if let Item::Import(imp) = item {
                 if imp.is_stdlib {
@@ -533,7 +538,7 @@ impl Codegen {
         // req.headers["X"] → r.Header.Get("X")
         // req.query["X"]   → r.URL.Query().Get("X")
         // req.body["X"]    → _huskBody["X"].(string)
-        // req.ctx["X"]     → fmt.Sprintf("%v", r.Context().Value("X"))
+        // req.ctx["X"]     → r.Context().Value("X")
         if let Expr::FieldAccess(inner, field) = obj {
             if let Expr::Ident(name) = inner.as_ref() {
                 if name == "req" {
@@ -548,8 +553,10 @@ impl Codegen {
                 }
             }
         }
+        // Para map index access (ex: user["field"]), adiciona type assertion .(string)
+        // Isso é necessário porque map[string]interface{} retorna interface{}
         Ok(format!(
-            "{}[{}]",
+            "{}[{}].(string)",
             self.gen_expr(obj, ctx)?,
             self.gen_expr(idx, ctx)?
         ))
@@ -576,9 +583,12 @@ impl Codegen {
                 .ok_or_else(|| CodegenError::new("set_ctx() requer um valor"))?;
             let key_go = self.gen_expr(key, ctx)?;
             let val_go = self.gen_expr(val, ctx)?;
+            let n = self.ctx_var_counter.get() + 1;
+            self.ctx_var_counter.set(n);
+            let ctx_var = format!("_huskCtx{}", n);
             return Ok(format!(
-                "_huskCtx := context.WithValue(r.Context(), {}, {})\nr = r.WithContext(_huskCtx)",
-                key_go, val_go
+                "{} := context.WithValue(r.Context(), {}, {})\nr = r.WithContext({})",
+                ctx_var, key_go, val_go, ctx_var
             ));
         }
 
@@ -997,8 +1007,8 @@ route GET /perfil [autenticado] {
 "#,
         );
         // escrita no middleware
-        assert!(go.contains("_huskCtx := context.WithValue(r.Context(), \"user_id\", \"42\")"));
-        assert!(go.contains("r = r.WithContext(_huskCtx)"));
+        assert!(go.contains("_huskCtx1 := context.WithValue(r.Context(), \"user_id\", \"42\")"));
+        assert!(go.contains("r = r.WithContext(_huskCtx1)"));
         // leitura na rota
         assert!(go.contains("r.Context().Value(\"user_id\")"));
         // import context adicionado
