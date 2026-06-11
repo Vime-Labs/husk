@@ -59,14 +59,65 @@ Indica ausência de erro. Use sempre como segundo valor em retornos bem-sucedido
 return valor, nil
 ```
 
-## Padrão recomendado em rotas
+## Operador `?` (Try)
+
+Para reduzir boilerplate, use `?` após uma chamada de função que retorna `(valor, error)`.
+
+### Uso básico
 
 ```husk
-route GET /usuarios/:id {
-    let usuario, err = usuarios.buscar(req.params.id)
-    if err != nil {
-        return status(404, json({ erro: err.message }))
-    }
-    return json(usuario)
+let usuario = usuarios.buscar(req.params.id)?
+```
+
+Isso gera automaticamente:
+
+```go
+usuario, __try_err := usuarios_buscar(req.params.id)
+if __try_err != nil {
+    w.WriteHeader(500)
+    w.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(w).Encode(map[string]interface{}{"erro": __try_err.Error()})
+    return
 }
 ```
+
+Equivalente a:
+
+```husk
+let usuario, err = usuarios.buscar(req.params.id)
+if err != nil {
+    return status(500, json({ erro: err.message }))
+}
+```
+
+### Status code customizado
+
+```husk
+let usuario = usuarios.buscar(req.params.id)? 404
+```
+
+### Mensagem customizada
+
+```husk
+let usuario = usuarios.buscar(req.params.id)? 404 "Usuário não encontrado"
+```
+
+### Exemplo completo
+
+Antes:
+```husk
+let usuario, err = usuarios.buscar(req.params.id)
+if err != nil {
+    return status(404, json({ erro: err.message }))
+}
+return json(usuario)
+```
+
+Depois:
+```husk
+let usuario = usuarios.buscar(req.params.id)? 404
+return json(usuario)
+```
+
+> O operador `?` só funciona dentro de `route` e `middleware` (contextos com acesso a `w`/`r` HTTP).
+> Status code padrão é `500`.
