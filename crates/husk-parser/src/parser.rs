@@ -279,20 +279,50 @@ impl Parser {
 
         let path = self.parse_route_path()?;
 
-        // middlewares opcionais: [mw1, mw2]
-        let middlewares = if matches!(self.current_kind(), TokenKind::LBracket) {
+        // middlewares e opções: [mw1, mw2, timeout=5s, rate_limit=100]
+        let (middlewares, timeout_secs, rate_limit) = if matches!(self.current_kind(), TokenKind::LBracket) {
             self.advance();
             let mut mws = Vec::new();
+            let mut timeout: Option<u64> = None;
+            let mut rate: Option<u64> = None;
             while !matches!(self.current_kind(), TokenKind::RBracket | TokenKind::Eof) {
-                mws.push(self.expect_ident()?);
+                let name = self.expect_ident()?;
+                // key=value
+                if matches!(self.current_kind(), TokenKind::Eq) {
+                    self.advance();
+                    let val = match self.current_kind().clone() {
+                        TokenKind::Int(n) => {
+                            self.advance();
+                            n as u64
+                        }
+                        _ => {
+                            return Err(ParseError::new(
+                                format!("esperado valor numérico após '{}='", name),
+                                self.current_span(),
+                            ));
+                        }
+                    };
+                    match name.as_str() {
+                        "timeout" => timeout = Some(val),
+                        "rate_limit" => rate = Some(val),
+                        other => {
+                            return Err(ParseError::new(
+                                format!("opção de rota desconhecida: '{other}' (esperado: timeout, rate_limit)"),
+                                self.current_span(),
+                            ));
+                        }
+                    }
+                } else {
+                    mws.push(name);
+                }
                 if matches!(self.current_kind(), TokenKind::Comma) {
                     self.advance();
                 }
             }
             self.expect(TokenKind::RBracket)?;
-            mws
+            (mws, timeout, rate)
         } else {
-            Vec::new()
+            (Vec::new(), None, None)
         };
 
         // contexto opcional: -> ctx_var (pode vir sem middlewares também)
@@ -303,6 +333,8 @@ impl Parser {
             method,
             path,
             middlewares,
+            timeout_secs,
+            rate_limit,
             ctx_var,
             body,
             span,
@@ -371,6 +403,8 @@ impl Parser {
             TokenKind::Let => self.parse_let(),
             TokenKind::If => Ok(Stmt::If(self.parse_if()?)),
             TokenKind::For => Ok(Stmt::ForIn(self.parse_for_in()?)),
+            TokenKind::Try => Ok(Stmt::TryCatch(self.parse_try_catch()?)),
+            TokenKind::Retry => Ok(Stmt::Retry(self.parse_retry()?)),
             _ => {
                 let expr = self.parse_expr()?;
                 // ctx.field = value  — assignment
@@ -432,6 +466,53 @@ impl Parser {
         Ok(ForInStmt {
             item,
             collection,
+            body,
+        })
+    }
+
+    fn parse_try_catch(&mut self) -> Result<TryCatchStmt, ParseError> {
+        self.expect(TokenKind::Try)?;
+        let try_block = self.parse_block()?;
+        self.expect(TokenKind::Catch)?;
+        let catch_var = self.expect_ident()?;
+        let catch_block = self.parse_block()?;
+        Ok(TryCatchStmt {
+            try_block,
+            catch_var,
+            catch_block,
+        })
+    }
+
+    fn parse_retry(&mut self) -> Result<RetryStmt, ParseError> {
+        self.expect(TokenKind::Retry)?;
+        let attempts = match self.current_kind().clone() {
+            TokenKind::Int(n) => {
+                self.advance();
+                n as u64
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "esperado número de tentativas após 'retry'",
+                    self.current_span(),
+                ));
+            }
+        };
+        let delay_ms = match self.current_kind().clone() {
+            TokenKind::Int(n) => {
+                self.advance();
+                n as u64
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "esperado delay em ms após número de tentativas",
+                    self.current_span(),
+                ));
+            }
+        };
+        let body = self.parse_block()?;
+        Ok(RetryStmt {
+            attempts,
+            delay_ms,
             body,
         })
     }
@@ -604,10 +685,15 @@ impl Parser {
                     } else {
                         None
                     };
+                    let circuit_breaker = matches!(self.current_kind(), TokenKind::Break);
+                    if circuit_breaker {
+                        self.advance(); // consome break
+                    }
                     expr = Expr::Try(TryExpr {
                         expr: Box::new(expr),
                         status_code,
                         message,
+                        circuit_breaker,
                     });
                 }
                 TokenKind::DotDotDot => {

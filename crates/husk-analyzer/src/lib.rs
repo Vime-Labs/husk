@@ -328,6 +328,38 @@ fn buscar(id int) (string, error) {
         );
     }
 
+    // ---- try/catch ----
+
+    #[test]
+    fn test_try_catch() {
+        analyze_src_ok(
+            r#"
+fn f() {
+    try {
+        let x = 1
+    } catch err {
+        return err.message
+    }
+}
+"#,
+        );
+    }
+
+    // ---- retry ----
+
+    #[test]
+    fn test_retry_stmt() {
+        analyze_src_ok(
+            r#"
+fn f() {
+    retry 3 100 {
+        let x = 1
+    }
+}
+"#,
+        );
+    }
+
     // ---- type conversions ----
 
     #[test]

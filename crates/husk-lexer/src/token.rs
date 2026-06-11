@@ -28,6 +28,10 @@ pub enum TokenKind {
     Nil,
     For,
     In,
+    Try,
+    Catch,
+    Retry,
+    Break,
 
     // Métodos HTTP
     Get,

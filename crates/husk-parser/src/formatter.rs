@@ -156,13 +156,25 @@ fn format_fn_def(f: &FnDef, out: &mut String, indent: usize) {
 fn format_route_def(r: &RouteDef, out: &mut String, indent: usize) {
     let i = indent_str(indent);
     out.push_str(&format!("{}route {} {}", i, format_http_method(&r.method), r.path.to_string()));
-    if !r.middlewares.is_empty() {
+    if !r.middlewares.is_empty() || r.timeout_secs.is_some() || r.rate_limit.is_some() {
         out.push_str(" [");
         for (j, mw) in r.middlewares.iter().enumerate() {
             if j > 0 {
                 out.push_str(", ");
             }
             out.push_str(mw);
+        }
+        if let Some(t) = r.timeout_secs {
+            if !r.middlewares.is_empty() {
+                out.push_str(", ");
+            }
+            out.push_str(&format!("timeout={}", t));
+        }
+        if let Some(rl) = r.rate_limit {
+            if !r.middlewares.is_empty() || r.timeout_secs.is_some() {
+                out.push_str(", ");
+            }
+            out.push_str(&format!("rate_limit={}", rl));
         }
         out.push(']');
     }
@@ -304,6 +316,9 @@ fn format_stmt(stmt: &Stmt, out: &mut String, indent: usize) {
             if let Some(ref msg) = tl.message {
                 out.push_str(&format!(" \"{}\"", msg));
             }
+            if tl.circuit_breaker {
+                out.push_str(" break");
+            }
         }
         Stmt::If(if_stmt) => {
             out.push_str(&i);
@@ -326,6 +341,20 @@ fn format_stmt(stmt: &Stmt, out: &mut String, indent: usize) {
             format_expr(&for_in.collection, out);
             out.push_str(" {\n");
             format_block(&for_in.body, out, indent + 1);
+            out.push_str(&format!("{}}}", i));
+        }
+        Stmt::TryCatch(tc) => {
+            out.push_str(&i);
+            out.push_str("try {\n");
+            format_block(&tc.try_block, out, indent + 1);
+            out.push_str(&format!("{}}} catch {} {{\n", i, tc.catch_var));
+            format_block(&tc.catch_block, out, indent + 1);
+            out.push_str(&format!("{}}}", i));
+        }
+        Stmt::Retry(r) => {
+            out.push_str(&i);
+            out.push_str(&format!("retry {} {} {{\n", r.attempts, r.delay_ms));
+            format_block(&r.body, out, indent + 1);
             out.push_str(&format!("{}}}", i));
         }
         Stmt::Assign(a) => {
@@ -412,6 +441,9 @@ fn format_expr(expr: &Expr, out: &mut String) {
             }
             if let Some(ref msg) = try_expr.message {
                 out.push_str(&format!(" \"{}\"", msg));
+            }
+            if try_expr.circuit_breaker {
+                out.push_str(" break");
             }
         }
         Expr::Spread(inner) => {

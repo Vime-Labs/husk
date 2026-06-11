@@ -86,6 +86,8 @@ pub struct RouteDef {
     pub method: HttpMethod,
     pub path: RoutePath,
     pub middlewares: Vec<String>,
+    pub timeout_secs: Option<u64>,
+    pub rate_limit: Option<u64>,
     pub ctx_var: Option<String>,
     pub body: Block,
     pub span: Span,
@@ -162,6 +164,10 @@ pub enum Stmt {
     If(IfStmt),
     /// for item in expr { body }
     ForIn(ForInStmt),
+    /// try { ... } catch err { ... }
+    TryCatch(TryCatchStmt),
+    /// retry N delay_ms { ... }
+    Retry(RetryStmt),
     /// assignment: target = expr  (e.g. ctx.field = value)
     Assign(AssignStmt),
     Expr(Expr),
@@ -187,6 +193,7 @@ pub struct TryLetStmt {
     pub call: Expr,
     pub status_code: Option<i64>,
     pub message: Option<String>,
+    pub circuit_breaker: bool,
 }
 
 /// expr? [status] ["msg"]  — try operator em expressões
@@ -195,6 +202,7 @@ pub struct TryExpr {
     pub expr: Box<Expr>,
     pub status_code: Option<i64>,
     pub message: Option<String>,
+    pub circuit_breaker: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +217,22 @@ pub struct IfStmt {
     pub struct ForInStmt {
         pub item: String,
         pub collection: Expr,
+        pub body: Block,
+    }
+
+    /// try { ... } catch err { ... }
+    #[derive(Debug, Clone)]
+    pub struct TryCatchStmt {
+        pub try_block: Block,
+        pub catch_var: String,
+        pub catch_block: Block,
+    }
+
+    /// retry N delay_ms { ... }
+    #[derive(Debug, Clone)]
+    pub struct RetryStmt {
+        pub attempts: u64,
+        pub delay_ms: u64,
         pub body: Block,
     }
 

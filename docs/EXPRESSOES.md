@@ -92,21 +92,60 @@ for item in items {
 }
 ```
 
-Gera `for _, item := range items { ... }` no Go. Útil para percorrer resultados de queries:
+Gera `for _, item := range items { ... }` no Go.
+
+## Try/Catch
+
+Recupera de panics dentro de um bloco:
 
 ```husk
-route GET /lista {
-    let rows, err = db.query("SELECT id, nome FROM usuarios")
-    if err != nil {
-        return status(500, json({ erro: err.message }))
-    }
-    for row in rows {
-        return json(row)
-    }
+try {
+    let user = db.query_one(sql)? 500
+    return json(user)
+} catch err {
+    return status(500, json({ erro: err.message }))
 }
 ```
 
-# Condicional
+Gera uma IIFE com `defer/recover` no Go. A variável `err` contém o erro como `string` convertido para `error`.
+
+## Retry
+
+Retenta um bloco de código N vezes com delay fixo em milissegundos entre tentativas:
+
+```husk
+retry 3 100 {
+    let rows = db.query(sql)?
+}
+```
+
+Gera um loop `for _i := 0; _i < N; _i++` com `time.Sleep(delay * time.Millisecond)` entre tentativas. Se o bloco executar sem panic, o loop é interrompido (`break`).
+
+```husk
+retry 5 500 {
+    let user = db.query_one("SELECT * FROM users WHERE id = $1", id)? 500
+    return json(user)
+}
+```
+
+## Circuit Breaker
+
+Ative o circuit breaker com `break` após `? [status] ["msg"]`:
+
+```husk
+let usuario = db.query_one("SELECT * FROM users WHERE id = $1", id)? 500 break
+```
+
+Gera wrapper que conta falhas consecutivas. Após 5 falhas, o circuito abre e retorna `503` sem executar a chamada. Após 30s de cooldown, permite um probe. Sucesso fecha o circuito.
+
+```husk
+route GET /users/:id {
+    let user = db.query_one("SELECT * FROM users WHERE id = $1", id)? 404 "Não encontrado" break
+    return json(user)
+}
+```
+
+## Condicional
 
 ```husk
 if condicao {

@@ -24,7 +24,7 @@ enum Ctx {
 }
 
 pub struct Codegen {
-    go_imports: BTreeSet<String>,
+    go_imports: RefCell<BTreeSet<String>>,
     /// alias de módulos do usuário: `alias.fn()` → `fn()`
     user_aliases: HashSet<String>,
     /// alias de módulos stdlib: `alias.fn()` → `alias_fn()`
@@ -47,12 +47,14 @@ pub struct Codegen {
     source_file: Option<String>,
     /// Mapa: linha Go → (arquivo husk, linha husk)
     source_map: RefCell<Vec<(usize, String, usize)>>,
+    /// Declarações de estado dos circuit breakers (geradas no escopo global)
+    circuit_breaker_decls: RefCell<Vec<String>>,
 }
 
 impl Codegen {
     pub fn new() -> Self {
         Self {
-            go_imports: BTreeSet::new(),
+            go_imports: RefCell::new(BTreeSet::new()),
             user_aliases: HashSet::new(),
             stdlib_aliases: HashSet::new(),
             ctx_var_counter: Cell::new(0),
@@ -64,6 +66,7 @@ impl Codegen {
             current_middleware_name: RefCell::new(None),
             source_file: None,
             source_map: RefCell::new(Vec::new()),
+            circuit_breaker_decls: RefCell::new(Vec::new()),
         }
     }
 
@@ -130,6 +133,13 @@ impl Codegen {
         let mut file = String::new();
         file.push_str("package main\n\n");
         file.push_str(&self.gen_imports());
+
+        // Declarações de circuit breaker (globais)
+        for decl in self.circuit_breaker_decls.borrow().iter() {
+            file.push_str(decl);
+            file.push('\n');
+        }
+
         file.push_str(&body);
 
         Ok(file)
@@ -138,18 +148,44 @@ impl Codegen {
     // --- coleta de imports Go ---
 
     fn collect_go_imports(&mut self, program: &Program) {
-        self.go_imports.insert("fmt".into());
-        self.go_imports.insert("log".into());
-        self.go_imports.insert("net/http".into());
+        self.go_imports.borrow_mut().insert("context".into());
+        self.go_imports.borrow_mut().insert("fmt".into());
+        self.go_imports.borrow_mut().insert("log".into());
+        self.go_imports.borrow_mut().insert("net/http".into());
+        self.go_imports.borrow_mut().insert("os/signal".into());
+        self.go_imports.borrow_mut().insert("syscall".into());
 
         let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
         if has_routes {
-            self.go_imports.insert("github.com/go-chi/chi/v5".into());
+            self.go_imports.borrow_mut().insert("github.com/go-chi/chi/v5".into());
+        }
+
+        let has_timeout = program.items.iter().any(|i| {
+            if let Item::RouteDef(r) = i {
+                r.timeout_secs.is_some()
+            } else {
+                false
+            }
+        });
+        if has_timeout {
+            self.go_imports.borrow_mut().insert("time".into());
+        }
+
+        let has_retry = program.items.iter().any(|i| {
+            match i {
+                Item::FnDef(f) => block_has_retry(&f.body),
+                Item::RouteDef(r) => block_has_retry(&r.body),
+                Item::MiddlewareDef(m) => block_has_retry(&m.body),
+                _ => false,
+            }
+        });
+        if has_retry {
+            self.go_imports.borrow_mut().insert("time".into());
         }
 
         let has_cors = program.items.iter().any(|i| matches!(i, Item::CorsDef(_)));
         if has_cors {
-            self.go_imports.insert("github.com/go-chi/cors".into());
+            self.go_imports.borrow_mut().insert("github.com/go-chi/cors".into());
         }
 
         for item in &program.items {
@@ -157,14 +193,14 @@ impl Codegen {
                 Item::FnDef(f) => self.scan_block_imports(&f.body, Ctx::Fn),
                 Item::RouteDef(r) => {
                     if block_uses_body(&r.body) {
-                        self.go_imports.insert("encoding/json".into());
+                        self.go_imports.borrow_mut().insert("encoding/json".into());
                     }
                     // Verifica se a rota tem parâmetros tipados (ex: :id<int>)
                     for seg in &r.path.segments {
                         if let PathSegment::Param(_name, Some(ty)) = seg {
                             match ty {
                                 Type::Int | Type::Float => {
-                                    self.go_imports.insert("strconv".into());
+                                    self.go_imports.borrow_mut().insert("strconv".into());
                                 }
                                 _ => {}
                             }
@@ -178,8 +214,8 @@ impl Codegen {
         }
 
         // .env loading no main() sempre usa os e strings
-        self.go_imports.insert("os".into());
-        self.go_imports.insert("strings".into());
+        self.go_imports.borrow_mut().insert("os".into());
+        self.go_imports.borrow_mut().insert("strings".into());
     }
 
     fn scan_block_imports(&mut self, block: &Block, ctx: Ctx) {
@@ -206,12 +242,19 @@ impl Codegen {
             Stmt::LetMulti(l) => self.scan_expr_imports(&l.value),
             Stmt::TryLet(t) => {
                 // TryLet usa json e encoding/json
-                self.go_imports.insert("encoding/json".into());
+                self.go_imports.borrow_mut().insert("encoding/json".into());
                 self.scan_expr_imports(&t.call);
             }
             Stmt::ForIn(f) => {
                 self.scan_expr_imports(&f.collection);
                 self.scan_block_imports(&f.body, ctx);
+            }
+            Stmt::TryCatch(tc) => {
+                self.scan_block_imports(&tc.try_block, ctx);
+                self.scan_block_imports(&tc.catch_block, ctx);
+            }
+            Stmt::Retry(r) => {
+                self.scan_block_imports(&r.body, ctx);
             }
             Stmt::If(i) => {
                 self.scan_block_imports(&i.then_block, ctx);
@@ -225,7 +268,7 @@ impl Codegen {
                 // ctx.field = value usa context.WithValue
                 if let Expr::FieldAccess(obj, _field) = a.target.as_ref() {
                     if let Expr::Ident(_name) = obj.as_ref() {
-                        self.go_imports.insert("context".into());
+                        self.go_imports.borrow_mut().insert("context".into());
                     }
                 }
             }
@@ -235,13 +278,13 @@ impl Codegen {
     fn scan_route_return_imports(&mut self, expr: &Expr) {
         match expr {
             Expr::Call(call) if is_builtin(&call.callee, "json") => {
-                self.go_imports.insert("encoding/json".into());
+                self.go_imports.borrow_mut().insert("encoding/json".into());
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
                 }
             }
             Expr::Call(call) if is_builtin(&call.callee, "status") => {
-                self.go_imports.insert("encoding/json".into());
+                self.go_imports.borrow_mut().insert("encoding/json".into());
                 if let Some(body) = call.args.get(1) {
                     self.scan_route_return_imports(body);
                 }
@@ -256,28 +299,28 @@ impl Codegen {
         match expr {
             Expr::Call(call) => {
                 if is_builtin(&call.callee, "set_ctx") {
-                    self.go_imports.insert("context".into());
+                    self.go_imports.borrow_mut().insert("context".into());
                 }
                 if is_builtin(&call.callee, "parse_int") {
-                    self.go_imports.insert("strconv".into());
+                    self.go_imports.borrow_mut().insert("strconv".into());
                 }
                 if is_builtin(&call.callee, "float") {
-                    self.go_imports.insert("strconv".into());
+                    self.go_imports.borrow_mut().insert("strconv".into());
                 }
                 if is_builtin(&call.callee, "string") {
-                    self.go_imports.insert("fmt".into());
+                    self.go_imports.borrow_mut().insert("fmt".into());
                 }
                 if is_builtin(&call.callee, "erro") {
-                    self.go_imports.insert("fmt".into());
+                    self.go_imports.borrow_mut().insert("fmt".into());
                 }
                 if is_builtin(&call.callee, "assert_eq") {
-                    self.go_imports.insert("fmt".into());
+                    self.go_imports.borrow_mut().insert("fmt".into());
                 }
                 if is_builtin(&call.callee, "require_role") {
-                    self.go_imports.insert("encoding/json".into());
+                    self.go_imports.borrow_mut().insert("encoding/json".into());
                 }
                 if is_builtin(&call.callee, "require_field") {
-                    self.go_imports.insert("encoding/json".into());
+                    self.go_imports.borrow_mut().insert("encoding/json".into());
                 }
                 // String built-ins
                 if matches!(
@@ -287,14 +330,14 @@ impl Codegen {
                             "contains" | "starts_with" | "replace"
                             | "split" | "trim" | "upper" | "lower")
                 ) {
-                    self.go_imports.insert("strings".into());
+                    self.go_imports.borrow_mut().insert("strings".into());
                 }
                 // Math built-ins
                 if matches!(
                     call.callee.as_ref(),
                     Expr::Ident(n) if matches!(n.as_str(), "abs" | "sqrt")
                 ) {
-                    self.go_imports.insert("math".into());
+                    self.go_imports.borrow_mut().insert("math".into());
                 }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
@@ -305,7 +348,7 @@ impl Codegen {
                 if let Expr::FieldAccess(inner, field) = obj.as_ref() {
                     if let Expr::Ident(name) = inner.as_ref() {
                         if name == "req" && field == "ctx" {
-                            self.go_imports.insert("context".into());
+                            self.go_imports.borrow_mut().insert("context".into());
                         }
                     }
                 }
@@ -318,7 +361,7 @@ impl Codegen {
             Expr::Unary(_, e) | Expr::FieldAccess(e, _) => self.scan_expr_imports(e),
             Expr::Try(t) => {
                 self.scan_expr_imports(&t.expr);
-                self.go_imports.insert("encoding/json".into());
+                self.go_imports.borrow_mut().insert("encoding/json".into());
             }
             Expr::Spread(e) => self.scan_expr_imports(e),
             _ => {}
@@ -326,16 +369,16 @@ impl Codegen {
     }
 
     fn gen_imports(&self) -> String {
-        if self.go_imports.is_empty() {
+        let imports = self.go_imports.borrow();
+        if imports.is_empty() {
             return String::new();
         }
         let mut s = String::from("import (\n");
-        let std_pkgs: Vec<_> = self
-            .go_imports
+        let std_pkgs: Vec<_> = imports
             .iter()
             .filter(|p| !p.contains('.'))
             .collect();
-        let ext_pkgs: Vec<_> = self.go_imports.iter().filter(|p| p.contains('.')).collect();
+        let ext_pkgs: Vec<_> = imports.iter().filter(|p| p.contains('.')).collect();
         for pkg in &std_pkgs {
             s.push_str(&format!("\t\"{}\"\n", pkg));
         }
@@ -503,7 +546,8 @@ impl Codegen {
         s.push_str("\t\t}\n");
         s.push_str("\t}\n\n");
 
-        s.push_str("\tr := chi.NewRouter()\n\n");
+        s.push_str("\tr := chi.NewRouter()\n");
+        s.push_str("\tr.Use(chi.Recoverer)\n\n");
 
         for item in &program.items {
             if let Item::CorsDef(c) = item {
@@ -523,8 +567,23 @@ impl Codegen {
         s.push_str("\t} else if port[0] != ':' {\n");
         s.push_str("\t\tport = \":\" + port\n");
         s.push_str("\t}\n");
+        s.push_str("\tsrv := &http.Server{Addr: port, Handler: r}\n");
+        s.push_str("\tgo func() {\n");
+        s.push_str("\t\tif err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {\n");
+        s.push_str("\t\t\tlog.Fatalf(\"listen: %s\\n\", err)\n");
+        s.push_str("\t\t}\n");
+        s.push_str("\t}()\n");
         s.push_str("\tfmt.Println(\"husk: servidor rodando em http://localhost\" + port + \"\")\n");
-        s.push_str("\tlog.Fatal(http.ListenAndServe(port, r))\n}\n");
+        s.push_str("\tquit := make(chan os.Signal, 1)\n");
+        s.push_str("\tsignal.Notify(quit, os.Interrupt, syscall.SIGTERM)\n");
+        s.push_str("\t<-quit\n");
+        s.push_str("\tfmt.Println(\"husk: desligando servidor...\")\n");
+        s.push_str("\tctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)\n");
+        s.push_str("\tdefer cancel()\n");
+        s.push_str("\tif err := srv.Shutdown(ctx); err != nil {\n");
+        s.push_str("\t\tlog.Fatalf(\"shutdown: %s\\n\", err)\n");
+        s.push_str("\t}\n");
+        s.push_str("}\n");
         Ok(s)
     }
 
@@ -542,10 +601,24 @@ impl Codegen {
         let path = route.path.to_string();
 
         // r.With(mw1, mw2).Get(...) ou r.Get(...)
-        let router = if route.middlewares.is_empty() {
+        let mut mw_parts: Vec<String> = route.middlewares.clone();
+
+        if let Some(t) = route.timeout_secs {
+            mw_parts.push(format!(
+                "func(next http.Handler) http.Handler {{ return http.TimeoutHandler(next, {}*time.Second, \"timeout\") }}",
+                t
+            ));
+        }
+
+        if let Some(rl) = route.rate_limit {
+            let rl_code = format!("func(next http.Handler) http.Handler {{ sem := make(chan struct{{}}, {rl}); return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{ select {{ case sem <- struct{{}}{{: defer func() {{ <-sem }}(); next.ServeHTTP(w, r); default: http.Error(w, \"rate limit exceeded\", http.StatusTooManyRequests) }} }} }}) }}");
+            mw_parts.push(rl_code);
+        }
+
+        let router = if mw_parts.is_empty() {
             "r".to_string()
         } else {
-            format!("r.With({})", route.middlewares.join(", "))
+            format!("r.With({})", mw_parts.join(", "))
         };
 
         let mut s = String::new();
@@ -678,6 +751,8 @@ impl Codegen {
                 ))
             }
             Stmt::ForIn(f) => self.gen_for_in(f, ctx, indent),
+            Stmt::TryCatch(tc) => self.gen_try_catch(tc, ctx, indent),
+            Stmt::Retry(r) => self.gen_retry(r, ctx, indent),
             Stmt::If(i) => self.gen_if(i, ctx, indent),
             Stmt::TryLet(t) => self.gen_try_let(t, ctx),
             Stmt::Assign(a) => self.gen_assign(a, ctx),
@@ -815,6 +890,51 @@ impl Codegen {
         ))
     }
 
+    fn gen_try_catch(&self, tc: &TryCatchStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
+        let _ind = "\t".repeat(indent);
+        let try_body = self.gen_block(&tc.try_block, ctx, indent + 1)?;
+        let catch_body = self.gen_block(&tc.catch_block, ctx, indent + 1)?;
+        let inner = "\t".repeat(indent + 1);
+        let try_indented = try_body
+            .lines()
+            .map(|l| {
+                let s = l.strip_prefix(&inner).unwrap_or(l);
+                format!("\t{}", s)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let catch_indented = catch_body
+            .lines()
+            .map(|l| {
+                let s = l.strip_prefix(&inner).unwrap_or(l);
+                format!("\t{}", s)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(format!(
+            "func() {{\ndefer func() {{\nif r := recover(); r != nil {{\n{} := fmt.Errorf(\"%v\", r)\n{}\n}}\n}}()\n{}\n}}()",
+            tc.catch_var, catch_indented, try_indented
+        ))
+    }
+
+    fn gen_retry(&self, r: &RetryStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
+        let _ind = "\t".repeat(indent);
+        let body = self.gen_block(&r.body, ctx, indent + 2)?;
+        let inner2 = "\t".repeat(indent + 2);
+        let body_indented = body
+            .lines()
+            .map(|l| {
+                let s = l.strip_prefix(&inner2).unwrap_or(l);
+                format!("\t\t{}", s)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(format!(
+            "for _i := 0; _i < {}; _i++ {{\nerr := func() error {{\n{}\nreturn nil\n}}()\nif err == nil {{\nbreak\n}}\ntime.Sleep({} * time.Millisecond)\n}}",
+            r.attempts, body_indented, r.delay_ms
+        ))
+    }
+
     fn gen_if(&self, i: &IfStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
         let inner_pad = "\t".repeat(indent + 1);
         let outer_pad = "\t".repeat(indent);
@@ -850,7 +970,7 @@ impl Codegen {
         Ok(s)
     }
 
-    /// let x = expr? [status] ["msg"]  — try: propaga erro como resposta HTTP
+    /// let x = expr? [status] ["msg"] [break]  — try: propaga erro como resposta HTTP
     fn gen_try_let(&self, t: &TryLetStmt, ctx: Ctx) -> Result<String, CodegenError> {
         let call_go = self.gen_expr(&t.call, ctx)?;
         let err_var = "__try_err";
@@ -867,17 +987,42 @@ impl Codegen {
             "{}, {} := {}\nif {} != nil {{",
             t.name, err_var, call_go, err_var
         );
+
+        if t.circuit_breaker {
+            let cb = "__cb_tl";
+            let decl = format!(
+                "var {} struct {{\n\tsync.Mutex\n\tfailures int\n\tlastFail time.Time\n\topen bool\n}}",
+                cb
+            );
+            self.circuit_breaker_decls.borrow_mut().push(decl);
+            self.go_imports.borrow_mut().insert("sync".into());
+            self.go_imports.borrow_mut().insert("time".into());
+            s.push_str(&format!(
+                "\n\t{}.Lock()\n\t{}.failures++\n\t{}.lastFail = time.Now()\n\tif {}.failures >= 5 {{ {}.open = true }}\n\t{}.Unlock()",
+                cb, cb, cb, cb, cb, cb
+            ));
+        }
+
         s.push_str(&format!("\n\tw.WriteHeader({})", code));
         s.push_str("\n\tw.Header().Set(\"Content-Type\", \"application/json\")");
         s.push_str(&format!(
             "\n\tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
-\
+             \
              \t\t\"erro\": {},\
-\
+             \
              \t}})",
             msg
         ));
         s.push_str("\n\treturn\n}\n");
+
+        if t.circuit_breaker {
+            let cb = "__cb_tl";
+            s.push_str(&format!(
+                "{}.Lock()\n{}.failures = 0\n{}.open = false\n{}.Unlock()\n",
+                cb, cb, cb, cb
+            ));
+        }
+
         Ok(s)
     }
 
@@ -923,7 +1068,7 @@ impl Codegen {
         }
     }
 
-    /// expr?  — gera preâmbulo e retorna nome da variável temporária
+    /// expr? [break] — gera preâmbulo e retorna nome da variável temporária
     fn gen_try_expr(&self, t: &TryExpr, ctx: Ctx) -> Result<String, CodegenError> {
         let n = self.try_var_counter.get() + 1;
         self.try_var_counter.set(n);
@@ -938,20 +1083,72 @@ impl Codegen {
             format!("{}.Error()", err_var)
         };
 
-        let preamble = format!(
+        let mut preamble = String::new();
+
+        // Circuit breaker: decl global + pre-check
+        if t.circuit_breaker {
+            let cb = format!("__cb_{}", n);
+            let decl = format!(
+                "var {} struct {{\n\tsync.Mutex\n\tfailures int\n\tlastFail time.Time\n\topen bool\n}}",
+                cb
+            );
+            self.circuit_breaker_decls.borrow_mut().push(decl);
+            self.go_imports.borrow_mut().insert("sync".into());
+            self.go_imports.borrow_mut().insert("time".into());
+
+            preamble.push_str(&format!(
+                "{}.Lock()\n\
+                 if {}.open {{\n\
+                 \tif time.Since({}.lastFail) < 30*time.Second {{\n\
+                 \t\t{}.Unlock()\n\
+                 \t\tw.WriteHeader(503)\n\
+                 \t\tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+                 \t\tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+                 \t\t\t\"erro\": \"circuit breaker aberto\"\
+                 \t\t}})\n\
+                 \t\treturn\n\
+                 \t}}\n\
+                 \t{}.open = false\n\
+                 \t{}.failures = 0\n\
+                 }}\n\
+                 {}.Unlock()",
+                cb, cb, cb, cb, cb, cb, cb
+            ));
+        }
+
+        // Erro: tracking de falha no circuit breaker
+        let err_tracking = if t.circuit_breaker {
+            let cb = format!("__cb_{}", n);
+            format!(
+                "\n\t{}.Lock()\n\t{}.failures++\n\t{}.lastFail = time.Now()\n\
+                 \tif {}.failures >= 5 {{ {}.open = true }}\n\t{}.Unlock()",
+                cb, cb, cb, cb, cb, cb
+            )
+        } else {
+            String::new()
+        };
+
+        preamble.push_str(&format!(
             "{}, {} := {}\n\
-             if {} != nil {{\n\
+             if {} != nil {{{}\n\
              \tw.WriteHeader({})\n\
              \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
-             \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
-\
+              \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
              \t\t\"erro\": {},\
-\
              \t}})\n\
              \treturn\n\
              }}",
-            val_var, err_var, call_go, err_var, code, msg
-        );
+            val_var, err_var, call_go, err_var, err_tracking, code, msg
+        ));
+
+        // Sucesso: reset do circuit breaker
+        if t.circuit_breaker {
+            let cb = format!("__cb_{}", n);
+            preamble.push_str(&format!(
+                "\n{}.Lock()\n{}.failures = 0\n{}.open = false\n{}.Unlock()",
+                cb, cb, cb, cb
+            ));
+        }
 
         self.pending_try.borrow_mut().push(preamble);
         Ok(val_var)
@@ -1465,6 +1662,36 @@ fn is_builtin(expr: &Expr, name: &str) -> bool {
     matches!(expr, Expr::Ident(n) if n == name)
 }
 
+fn block_has_retry(block: &Block) -> bool {
+    for stmt in &block.stmts {
+        match stmt {
+            Stmt::Retry(_) => return true,
+            Stmt::TryCatch(tc) => {
+                if block_has_retry(&tc.try_block) || block_has_retry(&tc.catch_block) {
+                    return true;
+                }
+            }
+            Stmt::If(i) => {
+                if block_has_retry(&i.then_block) {
+                    return true;
+                }
+                if let Some(ref eb) = i.else_block {
+                    if block_has_retry(eb) {
+                        return true;
+                    }
+                }
+            }
+            Stmt::ForIn(fi) => {
+                if block_has_retry(&fi.body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -1488,6 +1715,8 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
             block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
         }
         Stmt::TryLet(t) => expr_uses_body(&t.call),
+        Stmt::TryCatch(tc) => block_uses_body(&tc.try_block) || block_uses_body(&tc.catch_block),
+        Stmt::Retry(r) => block_uses_body(&r.body),
         Stmt::Assign(a) => expr_uses_body(&a.target) || expr_uses_body(&a.value),
     }
 }
@@ -2387,5 +2616,25 @@ route GET /ping {
             cors_pos < route_pos,
             "cors.Use deve aparecer antes das rotas"
         );
+    }
+
+    #[test]
+    fn test_circuit_breaker_variable() {
+        let go = codegen(
+            r#"
+fn query(sql string) (string, error) { return "ok", nil }
+route GET /user {
+    let x = query("SELECT 1")? break
+    return x
+}
+"#,
+        );
+        assert!(go.contains("var __cb_1 struct"));
+        assert!(go.contains("sync.Mutex"));
+        assert!(go.contains("open bool"));
+        assert!(go.contains("lastFail time.Time"));
+        assert!(go.contains("failures >= 5"));
+        assert!(go.contains("\"sync\""));
+        assert!(go.contains("\"time\""));
     }
 }

@@ -434,6 +434,17 @@ impl Checker {
                 self.check_expr(&a.value, scope, ctx);
                 vec![]
             }
+            Stmt::TryCatch(tc) => {
+                self.check_block(&tc.try_block, scope, ctx);
+                let mut catch_scope = scope.child();
+                catch_scope.declare_or_shadow(&tc.catch_var, Symbol::Variable(TypeInfo::Error));
+                self.check_block(&tc.catch_block, &mut catch_scope, ctx);
+                vec![]
+            }
+            Stmt::Retry(r) => {
+                self.check_block(&r.body, scope, ctx);
+                vec![]
+            }
             Stmt::Expr(e) => {
                 self.check_expr(e, scope, ctx);
                 vec![]

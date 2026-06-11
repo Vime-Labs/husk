@@ -115,6 +115,22 @@ let usuario = usuarios.buscar(req.params.id)? 404
 let usuario = usuarios.buscar(req.params.id)? 404 "Usuário não encontrado"
 ```
 
+### Circuit breaker
+
+Use `break` após `? [status] ["msg"]` para ativar o circuit breaker:
+
+```husk
+let usuario = usuarios.buscar(req.params.id)? 500 break
+```
+
+Isso gera um wrapper que:
+- Mantém contagem de falhas consecutivas por `? break`
+- Após 5 falhas consecutivas, abre o circuito — novas chamadas retornam `503` imediatamente sem executar a chamada real
+- Após 30s de cooldown, permite um probe request (half-open)
+- Em caso de sucesso, o circuito fecha e o contador de falhas zera
+
+> O circuit breaker usa `sync.Mutex` e `time` no Go gerado. Ideal para chamadas a bancos de dados e APIs externas que podem ficar indisponíveis temporariamente.
+
 ### Exemplo completo
 
 Antes:

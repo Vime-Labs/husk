@@ -10,10 +10,10 @@ route MÉTODO /caminho {
 }
 ```
 
-Rotas também podem receber middlewares e contexto tipado:
+Rotas também podem receber middlewares, opções e contexto tipado:
 
 ```husk
-route MÉTODO /caminho [middleware1, middleware2] -> ctx {
+route MÉTODO /caminho [middleware1, middleware2, timeout=5s, rate_limit=100] -> ctx {
     // corpo com ctx.field tipado
 }
 ```
@@ -180,6 +180,44 @@ cors {
 ```
 
 Campos disponíveis: `origins`, `methods`, `headers`. Gera middleware chi para todas as rotas.
+
+## Timeout por handler
+
+Impede que uma request fique pendente além do limite:
+
+```husk
+route GET /lenta [timeout=5s] {
+    return "ok"
+}
+```
+
+Gera `http.TimeoutHandler(next, 5*time.Second, "timeout")` no Go. Se o handler exceder o tempo, o cliente recebe `503 Service Unavailable`.
+
+## Rate limiting por handler
+
+Limita o número de requests simultâneas em um handler usando semáforo:
+
+```husk
+route GET /api [rate_limit=100] {
+    return json({ ok: true })
+}
+```
+
+Se o limite for excedido, o cliente recebe `429 Too Many Requests`. Pode ser combinado com timeout:
+
+```husk
+route GET /pesada [rate_limit=10, timeout=30s] {
+    return "processando..."
+}
+```
+
+## Graceful shutdown
+
+O servidor Husk lida com SIGTERM/SIGINT automaticamente: drena requests ativos antes de desligar, com timeout de 30s. Nenhuma configuração necessária.
+
+## Panic recovery
+
+Panics em handlers são capturados por `chi.Recoverer` — o servidor continua rodando e o cliente recebe `500 Internal Server Error`.
 
 ## Verificação de role com `require_role`
 
