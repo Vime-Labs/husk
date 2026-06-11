@@ -167,6 +167,9 @@ impl Codegen {
                 if is_builtin(&call.callee, "set_ctx") {
                     self.go_imports.insert("context".into());
                 }
+                if is_builtin(&call.callee, "parse_int") {
+                    self.go_imports.insert("strconv".into());
+                }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
                 }
@@ -553,9 +556,13 @@ impl Codegen {
         }
 
         // req.headers → tratado em gen_index
-        // req.X → acesso direto ao *http.Request como fallback
+        // req.body → o JSON decodificado (_huskBody)
+        // req.X → outros acessos diretos ao *http.Request
         if let Expr::Ident(name) = obj {
             if name == "req" {
+                if field == "body" {
+                    return Ok("_huskBody".into());
+                }
                 // req.method, req.url, etc. — acesso direto ao r
                 return Ok(format!("r.{}", capitalize(field)));
             }
@@ -635,6 +642,16 @@ impl Codegen {
                 "{} := context.WithValue(r.Context(), {}, {})\nr = r.WithContext({})",
                 ctx_var, key_go, val_go, ctx_var
             ));
+        }
+
+        // parse_int(expr) → strconv.Atoi(expr)
+        if is_builtin(&call.callee, "parse_int") {
+            let arg = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("parse_int() requer um argumento"))?;
+            let arg_go = self.gen_expr(arg, ctx)?;
+            return Ok(format!("strconv.Atoi({})", arg_go));
         }
 
         // alias.metodo(args)
@@ -767,7 +784,15 @@ fn expr_uses_body(expr: &Expr) -> bool {
             false
         }
         Expr::Call(c) => expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body),
-        Expr::FieldAccess(e, _) => expr_uses_body(e),
+        Expr::FieldAccess(e, field) => {
+            // req.body (sem index) também conta como uso do body
+            if let Expr::Ident(name) = e.as_ref() {
+                if name == "req" && field == "body" {
+                    return true;
+                }
+            }
+            expr_uses_body(e)
+        }
         Expr::BinOp(l, _, r) => expr_uses_body(l) || expr_uses_body(r),
         Expr::Unary(_, e) => expr_uses_body(e),
         _ => false,
@@ -1194,5 +1219,35 @@ route GET /ping {
         );
         assert!(go.contains("json.NewEncoder(w).Encode"));
         assert!(go.contains("\"status\": \"ok\""));
+    }
+
+    #[test]
+    fn test_req_body_como_variavel() {
+        // let body = req.body  → _huskBody, não r.Body
+        let go = codegen(
+            r#"
+route POST /dados {
+    let body = req.body
+    return body["nome"]
+}
+"#,
+        );
+        assert!(go.contains("body := _huskBody"));
+        assert!(!go.contains("body := r.Body"));
+        assert!(go.contains("body[\"nome\"].(string)"));
+    }
+
+    #[test]
+    fn test_parse_int_builtin() {
+        let go = codegen(
+            r#"
+route GET /convert {
+    let n = parse_int("42")?
+    return n
+}
+"#,
+        );
+        assert!(go.contains("strconv.Atoi(\"42\")"));
+        assert!(go.contains("\"strconv\""));
     }
 }

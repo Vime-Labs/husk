@@ -30,6 +30,15 @@ impl Checker {
                 &Span { line: 0, col: 0 },
             );
         }
+        // parse_int(s string) (int, error)
+        let _ = global.declare(
+            "parse_int",
+            Symbol::Function(FnSignature {
+                params: vec![("s".into(), TypeInfo::String)],
+                return_types: vec![TypeInfo::Int, TypeInfo::Error],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         Self {
             global,
             errors: Vec::new(),
@@ -254,10 +263,15 @@ impl Checker {
                 vec![]
             }
             Stmt::TryLet(t) => {
-                // let x = expr?  — verifica que é chamada de função
-                let _ = self.check_expr(&t.call, scope, ctx);
+                // let x = expr?  — só válido em rotas e middlewares
+                if ctx != Ctx::Route && ctx != Ctx::Middleware {
+                    self.errors.push(SemanticError::new(
+                        "'?' só pode ser usado dentro de rotas e middlewares",
+                        Span { line: 0, col: 0 },
+                    ));
+                }
 
-                // Declara a variável com tipo Unknown (vem do retorno da função)
+                let _ = self.check_expr(&t.call, scope, ctx);
                 scope.declare_or_shadow(&t.name, Symbol::Variable(TypeInfo::Unknown));
 
                 // Verifica que o status code é válido
