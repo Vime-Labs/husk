@@ -566,7 +566,10 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" | "set_ctx" | "parse_int" => return Some(TypeInfo::Unknown),
+            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" => {
+                return Some(TypeInfo::Unknown)
+            }
+            "string" => return Some(TypeInfo::String),
             _ => {}
         }
 

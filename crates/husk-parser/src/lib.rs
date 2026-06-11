@@ -166,6 +166,27 @@ fn f(ok bool) {
     }
 
     #[test]
+    fn test_type_conversion_calls() {
+        let prog = parse(
+            r#"
+fn f() float {
+    return float("3.14")
+}
+fn s() string {
+    return string(42)
+}
+"#,
+        );
+        let Item::FnDef(f1) = &prog.items[0] else { panic!() };
+        let Stmt::Return(exprs1) = &f1.body.stmts[0] else { panic!() };
+        assert!(matches!(&exprs1[0], Expr::Call(c) if matches!(*c.callee.clone(), Expr::Ident(n) if n == "float")));
+
+        let Item::FnDef(f2) = &prog.items[1] else { panic!() };
+        let Stmt::Return(exprs2) = &f2.body.stmts[0] else { panic!() };
+        assert!(matches!(&exprs2[0], Expr::Call(c) if matches!(*c.callee.clone(), Expr::Ident(n) if n == "string")));
+    }
+
+    #[test]
     fn test_for_in_simples() {
         let prog = parse(
             r#"

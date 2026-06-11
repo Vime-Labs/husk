@@ -312,6 +312,30 @@ route GET /hello {
         );
     }
 
+    // ---- type conversions ----
+
+    #[test]
+    fn test_float_conversion() {
+        analyze_src_ok(
+            r#"
+fn f(s string) (float, error) {
+    return float(s)
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_string_conversion() {
+        analyze_src_ok(
+            r#"
+fn f(x int) string {
+    return string(x)
+}
+"#,
+        );
+    }
+
     // ---- for...in ----
 
     #[test]

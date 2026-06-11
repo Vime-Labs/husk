@@ -264,6 +264,12 @@ impl Codegen {
                 if is_builtin(&call.callee, "parse_int") {
                     self.go_imports.insert("strconv".into());
                 }
+                if is_builtin(&call.callee, "float") {
+                    self.go_imports.insert("strconv".into());
+                }
+                if is_builtin(&call.callee, "string") {
+                    self.go_imports.insert("fmt".into());
+                }
                 if is_builtin(&call.callee, "require_role") {
                     self.go_imports.insert("encoding/json".into());
                 }
@@ -1060,6 +1066,26 @@ impl Codegen {
                 .ok_or_else(|| CodegenError::new("parse_int() requer um argumento"))?;
             let arg_go = self.gen_expr(arg, ctx)?;
             return Ok(format!("strconv.Atoi({})", arg_go));
+        }
+
+        // float(expr) → strconv.ParseFloat(expr, 64)
+        if is_builtin(&call.callee, "float") {
+            let arg = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("float() requer um argumento"))?;
+            let arg_go = self.gen_expr(arg, ctx)?;
+            return Ok(format!("strconv.ParseFloat({}, 64)", arg_go));
+        }
+
+        // string(expr) → fmt.Sprintf("%v", expr)
+        if is_builtin(&call.callee, "string") {
+            let arg = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("string() requer um argumento"))?;
+            let arg_go = self.gen_expr(arg, ctx)?;
+            return Ok(format!("fmt.Sprintf(\"%v\", {})", arg_go));
         }
 
         // require_role(actual_value, expected_role) ou require_role(actual_value, expected_role, "mensagem")
@@ -2174,6 +2200,49 @@ route GET /list {
         let program = Parser::new(tokens).parse().unwrap();
         let go = cg.generate(&program).unwrap();
         assert!(go.contains("// husk:auth.husk:1"));
+    }
+
+    // ---- type conversion built-ins ----
+
+    #[test]
+    fn test_float_conversion() {
+        let go = codegen(
+            r#"
+fn f(s string) (float, error) {
+    return float(s)
+}
+"#,
+        );
+        assert!(go.contains("strconv.ParseFloat(s, 64)"));
+        assert!(go.contains("\"strconv\""));
+    }
+
+    #[test]
+    fn test_string_conversion() {
+        let go = codegen(
+            r#"
+fn f(x int) string {
+    return string(x)
+}
+"#,
+        );
+        assert!(go.contains("fmt.Sprintf(\"%v\", x)"));
+        assert!(go.contains("\"fmt\""));
+    }
+
+    // ---- port configuration ----
+
+    #[test]
+    fn test_port_config() {
+        let go = codegen(
+            r#"
+route GET /ping {
+    return "ok"
+}
+"#,
+        );
+        assert!(go.contains("os.Getenv(\"PORT\")"));
+        assert!(go.contains("port = \":8080\""));
     }
 
     #[test]
