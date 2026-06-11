@@ -192,6 +192,36 @@ require_role("admin", "Só administradores")
 
 > `require_role` só funciona dentro de rotas e middlewares (contexto com `req`).
 
+### `require_field` — validação de campos obrigatórios
+
+Valida que um campo do body não está vazio antes de prosseguir:
+
+```husk
+route POST /usuarios {
+    require_field("nome")
+    require_field("email")
+    let body = req.body
+    // só chega aqui se nome e email não estão vazios
+    return status(201, { ok: true })
+}
+```
+
+Equivalente a:
+
+```husk
+if body["nome"] == "" || body["nome"] == nil {
+    return status(400, { erro: "Campo obrigatório: nome" })
+}
+```
+
+Mensagem customizada:
+
+```husk
+require_field("cpf", "CPF é obrigatório para pessoa física")
+```
+
+> `require_field` acessa `req.body` internamente, então o body JSON é decodificado automaticamente.
+
 ## Notas
 
 - Não existe ordem de declaração — uma rota pode chamar uma função definida depois dela no arquivo.

@@ -798,6 +798,35 @@ impl Codegen {
             ));
         }
 
+        // require_field("nome") ou require_field("nome", "mensagem")
+        // Gera validação de campo obrigatório no body
+        if is_builtin(&call.callee, "require_field") {
+            let field = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("require_field() requer um nome de campo"))?;
+            let field_go = self.gen_expr(field, ctx)?;
+            let msg = call
+                .args
+                .get(1)
+                .map(|m| self.gen_expr(m, ctx))
+                .transpose()?
+                .unwrap_or_else(|| format!("\"Campo obrigatório: \" + {}", field_go));
+            return Ok(format!(
+                "if {} == \"\" || _huskBody[{}] == nil {{\n\
+                 \tw.WriteHeader(400)\n\
+                 \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+                 \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+\
+                 \t\t\"erro\": {},\
+\
+                 \t}})\n\
+                 \treturn\n\
+                 }}",
+                field_go, field_go, msg
+            ));
+        }
+
         // alias.metodo(args)
         // stdlib: env.get(x) → env_get(x)
         // usuário: usuarios.listar() → listar()
@@ -963,7 +992,15 @@ fn expr_uses_body(expr: &Expr) -> bool {
             }
             false
         }
-        Expr::Call(c) => expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body),
+        Expr::Call(c) => {
+            // require_field usa _huskBody internamente
+            if let Expr::Ident(name) = c.callee.as_ref() {
+                if name == "require_field" {
+                    return true;
+                }
+            }
+            expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body)
+        }
         Expr::FieldAccess(e, field) => {
             // req.body (sem index) também conta como uso do body
             if let Expr::Ident(name) = e.as_ref() {
@@ -1471,6 +1508,35 @@ route POST /criar {
 "#,
         );
         assert!(go.contains("criar(body[\"nome\"].(string), body[\"idade\"].(int))"));
+    }
+
+    #[test]
+    fn test_require_field() {
+        let go = codegen(
+            r#"
+route POST /criar {
+    require_field("nome")
+    return { ok: true }
+}
+"#,
+        );
+        assert!(go.contains("_huskBody[\"nome\"] == nil"));
+        assert!(go.contains("w.WriteHeader(400)"));
+        assert!(go.contains("\"erro\""));
+    }
+
+    #[test]
+    fn test_require_field_com_mensagem() {
+        let go = codegen(
+            r#"
+route POST /criar {
+    require_field("email", "Email é obrigatório")
+    return { ok: true }
+}
+"#,
+        );
+        assert!(go.contains("_huskBody[\"email\"] == nil"));
+        assert!(go.contains("\"Email é obrigatório\""));
     }
 
     #[test]

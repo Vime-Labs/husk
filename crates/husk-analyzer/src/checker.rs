@@ -48,6 +48,15 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // require_field(field string) — valida campo obrigatório no body
+        let _ = global.declare(
+            "require_field",
+            Symbol::Function(FnSignature {
+                params: vec![("field".into(), TypeInfo::String)],
+                return_types: vec![],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         Self {
             global,
             errors: Vec::new(),
