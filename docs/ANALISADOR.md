@@ -54,6 +54,11 @@ O analisador semântico é a terceira fase do pipeline do Husk (após lexer e pa
 - **`err.message`** — só pode ser acessado em valores do tipo `error` (ou `Unknown`)
 - **Multi-retorno** — `let a, b = fn()` deve ter exatamente 2 variáveis
 
+### Built-ins
+
+- **`set_ctx(chave, valor)`** — disponível em middlewares e rotas para armazenar dados no contexto da requisição
+- **`parse_int(s)`** — converte string para inteiro, retorna `(int, error)`. Use com `?`: `parse_int(req.params.id)?`
+
 ## Integração com CLI
 
 O analisador é executado automaticamente em todos os comandos da CLI:

@@ -1,5 +1,6 @@
 use husk_parser::ast::*;
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashSet};
 
 #[derive(Debug)]
@@ -30,6 +31,10 @@ pub struct Codegen {
     stdlib_aliases: HashSet<String>,
     /// Contador para nomes únicos de variáveis _huskCtx
     ctx_var_counter: Cell<usize>,
+    /// Contador para nomes únicos de variáveis __tryN
+    try_var_counter: Cell<usize>,
+    /// Preâmbulos pendentes gerados por expr? dentro de expressões
+    pending_try: RefCell<Vec<String>>,
 }
 
 impl Codegen {
@@ -39,11 +44,14 @@ impl Codegen {
             user_aliases: HashSet::new(),
             stdlib_aliases: HashSet::new(),
             ctx_var_counter: Cell::new(0),
+            try_var_counter: Cell::new(0),
+            pending_try: RefCell::new(Vec::new()),
         }
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, CodegenError> {
         self.ctx_var_counter.set(0);
+        self.try_var_counter.set(0);
         for item in &program.items {
             if let Item::Import(imp) = item {
                 if imp.is_stdlib {
@@ -190,6 +198,10 @@ impl Codegen {
                 self.scan_expr_imports(r);
             }
             Expr::Unary(_, e) | Expr::FieldAccess(e, _) => self.scan_expr_imports(e),
+            Expr::Try(t) => {
+                self.scan_expr_imports(&t.expr);
+                self.go_imports.insert("encoding/json".into());
+            }
             _ => {}
         }
     }
@@ -332,6 +344,9 @@ impl Codegen {
         let mut declared: HashSet<String> = HashSet::new();
 
         for stmt in &block.stmts {
+            // Emite preâmbulos pendentes de expr? antes do statement
+            self.flush_pending_try(&mut s, &pad);
+
             let generated = self.gen_stmt(stmt, ctx, indent, &mut declared)?;
             for line in generated.lines() {
                 s.push_str(&pad);
@@ -339,6 +354,8 @@ impl Codegen {
                 s.push('\n');
             }
         }
+        // Garante que não sobrou nada pendente
+        self.flush_pending_try(&mut s, &pad);
         Ok(s)
     }
 
@@ -349,7 +366,8 @@ impl Codegen {
         indent: usize,
         declared: &mut HashSet<String>,
     ) -> Result<String, CodegenError> {
-        match stmt {
+        // Captura qualquer preâmbulo pendente gerado pelo statement
+        let result = match stmt {
             Stmt::Return(exprs) => self.gen_return(exprs, ctx),
             Stmt::Let(l) => {
                 let op = if declared.contains(&l.name) {
@@ -358,12 +376,8 @@ impl Codegen {
                     ":="
                 };
                 declared.insert(l.name.clone());
-                Ok(format!(
-                    "{} {} {}",
-                    l.name,
-                    op,
-                    self.gen_expr(&l.value, ctx)?
-                ))
+                let expr = self.gen_expr(&l.value, ctx)?;
+                Ok(format!("{} {} {}", l.name, op, expr))
             }
             Stmt::LetMulti(l) => {
                 // Go exige ao menos um nome novo para :=; se todos já existem, usa =
@@ -382,6 +396,16 @@ impl Codegen {
             Stmt::If(i) => self.gen_if(i, ctx, indent),
             Stmt::TryLet(t) => self.gen_try_let(t, ctx),
             Stmt::Expr(e) => self.gen_expr(e, ctx),
+        };
+
+        // Se gerou preâmbulos (expr?), combina com o resultado
+        let mut buf = String::new();
+        self.flush_pending_try(&mut buf, "");
+        let stmt = result?;
+        if buf.is_empty() {
+            Ok(stmt)
+        } else {
+            Ok(format!("{}{}", buf, stmt))
         }
     }
 
@@ -517,6 +541,18 @@ impl Codegen {
         Ok(s)
     }
 
+    /// Emite preâmbulos pendentes de expr? no buffer de saída
+    fn flush_pending_try(&self, s: &mut String, pad: &str) {
+        let pending = self.pending_try.borrow_mut().drain(..).collect::<Vec<_>>();
+        for preamble in pending {
+            for line in preamble.lines() {
+                s.push_str(pad);
+                s.push_str(line);
+                s.push('\n');
+            }
+        }
+    }
+
     // --- expressões ---
 
     fn gen_expr(&self, expr: &Expr, ctx: Ctx) -> Result<String, CodegenError> {
@@ -542,7 +578,42 @@ impl Codegen {
             }
             Expr::MapLit(m) => self.gen_map_lit(m, ctx),
             Expr::StructInit(s) => self.gen_struct_init(s, ctx),
+            Expr::Try(t) => self.gen_try_expr(t, ctx),
         }
+    }
+
+    /// expr?  — gera preâmbulo e retorna nome da variável temporária
+    fn gen_try_expr(&self, t: &TryExpr, ctx: Ctx) -> Result<String, CodegenError> {
+        let n = self.try_var_counter.get() + 1;
+        self.try_var_counter.set(n);
+        let val_var = format!("__try{}_val", n);
+        let err_var = format!("__try{}_err", n);
+
+        let call_go = self.gen_expr(&t.expr, ctx)?;
+        let code = t.status_code.unwrap_or(500);
+        let msg = if let Some(msg) = &t.message {
+            format!("\"{}\"", msg.replace('"', "\\\"").replace('\n', "\\n"))
+        } else {
+            format!("{}.Error()", err_var)
+        };
+
+        let preamble = format!(
+            "{}, {} := {}\n\
+             if {} != nil {{\n\
+             \tw.WriteHeader({})\n\
+             \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+             \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+\
+             \t\t\"erro\": {},\
+\
+             \t}})\n\
+             \treturn\n\
+             }}",
+            val_var, err_var, call_go, err_var, code, msg
+        );
+
+        self.pending_try.borrow_mut().push(preamble);
+        Ok(val_var)
     }
 
     fn gen_field_access(&self, obj: &Expr, field: &str, ctx: Ctx) -> Result<String, CodegenError> {
@@ -795,6 +866,7 @@ fn expr_uses_body(expr: &Expr) -> bool {
         }
         Expr::BinOp(l, _, r) => expr_uses_body(l) || expr_uses_body(r),
         Expr::Unary(_, e) => expr_uses_body(e),
+        Expr::Try(t) => expr_uses_body(&t.expr),
         _ => false,
     }
 }
@@ -1148,26 +1220,24 @@ route POST /login {
     fn test_try_let_simples() {
         let go = codegen(
             r#"
-fn buscar(id int) string { return "x" }
 route GET /user/:id {
     let nome = buscar(1)?
     return nome
 }
 "#,
         );
-        // Gera: nome, __try_err := buscar(1)
-        assert!(go.contains("nome, __try_err := buscar(1)"));
-        assert!(go.contains("if __try_err != nil"));
+        // Gera preâmbulo com __try1_val, __try1_err
+        assert!(go.contains("__try1_val, __try1_err := buscar(1)"));
+        assert!(go.contains("if __try1_err != nil"));
         assert!(go.contains("w.WriteHeader(500)"));
-        assert!(go.contains("\"erro\": __try_err.Error()"));
-        assert!(go.contains("return"));
+        assert!(go.contains("\"erro\": __try1_err.Error()"));
+        assert!(go.contains("nome := __try1_val"));
     }
 
     #[test]
     fn test_try_let_com_status() {
         let go = codegen(
             r#"
-fn buscar(id int) string { return "x" }
 route GET /user/:id {
     let nome = buscar(1)? 404
     return nome
@@ -1175,13 +1245,13 @@ route GET /user/:id {
 "#,
         );
         assert!(go.contains("w.WriteHeader(404)"));
+        assert!(go.contains("nome := __try1_val"));
     }
 
     #[test]
     fn test_try_let_com_mensagem() {
         let go = codegen(
             r#"
-fn buscar(id int) string { return "x" }
 route GET /user/:id {
     let nome = buscar(1)? 400 "Usuário não encontrado"
     return nome
@@ -1190,6 +1260,32 @@ route GET /user/:id {
         );
         assert!(go.contains("w.WriteHeader(400)"));
         assert!(go.contains("\"erro\": \"Usuário não encontrado\""));
+    }
+
+    #[test]
+    fn test_try_expressao_aninhada() {
+        // expr? dentro de argumentos de função
+        let go = codegen(
+            r#"
+fn buscar(id int) string { return "x" }
+route GET /user/:id {
+    let x = buscar(parse_int("42")?)?
+    return x
+}
+"#,
+        );
+        // Preâmbulos vêm ANTES da assignment
+        // Inner (parse_int) é executado primeiro no Go → __try2 (contador incrementa na ordem inversa)
+        assert!(go.contains("__try2_val, __try2_err := strconv.Atoi"));
+        assert!(go.contains("__try1_val, __try1_err := buscar"));
+        assert!(go.contains("x := __try1_val"));
+        // __try2 (inner, executado primeiro) deve vir antes de __try1 no código
+        let pos2 = go.find("__try2_val, __try2_err").unwrap();
+        let pos1 = go.find("__try1_val, __try1_err").unwrap();
+        assert!(
+            pos2 < pos1,
+            "inner try (__try2) deve vir antes do outer (__try1) no código Go"
+        );
     }
 
     #[test]
@@ -1249,5 +1345,6 @@ route GET /convert {
         );
         assert!(go.contains("strconv.Atoi(\"42\")"));
         assert!(go.contains("\"strconv\""));
+        assert!(go.contains("__try1_val, __try1_err := strconv.Atoi(\"42\")"));
     }
 }

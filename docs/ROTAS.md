@@ -127,6 +127,20 @@ var _huskBody map[string]interface{}
 json.NewDecoder(r.Body).Decode(&_huskBody)
 ```
 
+Você também pode atribuir `req.body` a uma variável para reutilizar:
+
+```husk
+route POST /cadastro {
+    let body = req.body
+    if body["nome"] == "" {
+        return status(400, { erro: "Nome obrigatório" })
+    }
+    let nome = body["nome"]
+    let email = body["email"]
+    return status(201, { id: 1 })
+}
+```
+
 ## Middlewares por rota
 
 Aplique um ou mais middlewares declarando-os entre colchetes após o path:

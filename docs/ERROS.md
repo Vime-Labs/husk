@@ -72,13 +72,14 @@ let usuario = usuarios.buscar(req.params.id)?
 Isso gera automaticamente:
 
 ```go
-usuario, __try_err := usuarios_buscar(req.params.id)
-if __try_err != nil {
+__try1_val, __try1_err := usuarios_buscar(req.params.id)
+if __try1_err != nil {
     w.WriteHeader(500)
     w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(map[string]interface{}{"erro": __try_err.Error()})
+    json.NewEncoder(w).Encode(map[string]interface{}{"erro": __try1_err.Error()})
     return
 }
+usuario := __try1_val
 ```
 
 Equivalente a:
@@ -88,6 +89,32 @@ let usuario, err = usuarios.buscar(req.params.id)
 if err != nil {
     return status(500, json({ erro: err.message }))
 }
+```
+
+### Uso em expressões aninhadas
+
+O `?` funciona dentro de argumentos de função, permitindo encadear chamadas:
+
+```husk
+let cliente = clientes.buscar(parse_int(req.params.id)?)? 404 "Cliente não encontrado"
+```
+
+Cada `?` gera seu próprio bloco de tratamento de erro. O código gerado executa as operações na ordem correta:
+
+```go
+__try1_val, __try1_err := strconv.Atoi(chi.URLParam(r, "id"))
+if __try1_err != nil {
+    w.WriteHeader(500)
+    ...
+    return
+}
+__try2_val, __try2_err := buscar(__try1_val)
+if __try2_err != nil {
+    w.WriteHeader(404)
+    ...
+    return
+}
+cliente := __try2_val
 ```
 
 ### Status code customizado

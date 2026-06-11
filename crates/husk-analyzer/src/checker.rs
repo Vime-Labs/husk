@@ -303,6 +303,26 @@ impl Checker {
             Expr::Unary(op, e) => self.check_unary(op, e, scope, ctx),
             Expr::MapLit(_) => TypeInfo::Map,
             Expr::StructInit(s) => self.check_struct_init(s, scope, ctx),
+            Expr::Try(t) => {
+                // expr? — valida contexto e retorna tipo interno
+                if ctx != Ctx::Route && ctx != Ctx::Middleware {
+                    self.errors.push(SemanticError::new(
+                        "'?' só pode ser usado dentro de rotas e middlewares",
+                        Span { line: 0, col: 0 },
+                    ));
+                }
+                if let Some(code) = t.status_code {
+                    if code < 100 || code > 599 {
+                        self.errors.push(SemanticError::new(
+                            format!("status code HTTP inválido: {}", code),
+                            Span { line: 0, col: 0 },
+                        ));
+                    }
+                }
+                // O tipo de expr? é o tipo que a expressão retorna (unknown)
+                let _ = self.check_expr(&t.expr, scope, ctx);
+                TypeInfo::Unknown
+            }
         }
     }
 
@@ -387,7 +407,7 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" | "set_ctx" => return Some(TypeInfo::Unknown),
+            "json" | "text" | "status" | "set_ctx" | "parse_int" => return Some(TypeInfo::Unknown),
             _ => {}
         }
 

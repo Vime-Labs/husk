@@ -160,6 +160,14 @@ pub struct TryLetStmt {
     pub message: Option<String>,
 }
 
+/// expr? [status] ["msg"]  — try operator em expressões
+#[derive(Debug, Clone)]
+pub struct TryExpr {
+    pub expr: Box<Expr>,
+    pub status_code: Option<i64>,
+    pub message: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct IfStmt {
     pub condition: Expr,
@@ -179,6 +187,8 @@ pub enum Expr {
     Unary(UnaryOp, Box<Expr>),
     MapLit(MapLit),
     StructInit(StructInit),
+    /// expr? [status] ["msg"]  — try operator
+    Try(TryExpr),
 }
 
 #[derive(Debug, Clone)]

@@ -102,7 +102,21 @@ return "resultado", nil
 
 ## Conversão de tipos
 
-Não há conversão implícita. Conversão explícita virá em versão futura.
+Não há conversão implícita entre tipos. Use `parse_int()` para converter string para inteiro:
+
+```husk
+fn buscar(id int) (map, error)
+
+route GET /users/:id {
+    let id = parse_int(req.params.id)? 400 "ID inválido"
+    let user = buscar(id)? 404 "Usuário não encontrado"
+    return json(user)
+}
+```
+
+`parse_int(s)` gera `strconv.Atoi(s)` no Go, retornando `(int, error)`. Por isso deve ser usado com `?`.
+
+> Conversão explícita para outros tipos (`float`, `string`) virá em versões futuras.
 
 ## Inferência de retorno em funções
 
