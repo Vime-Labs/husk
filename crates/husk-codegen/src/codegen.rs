@@ -8,7 +8,9 @@ pub struct CodegenError {
 
 impl CodegenError {
     fn new(msg: impl Into<String>) -> Self {
-        Self { message: msg.into() }
+        Self {
+            message: msg.into(),
+        }
     }
 }
 
@@ -53,11 +55,11 @@ impl Codegen {
 
         for item in &program.items {
             match item {
-                Item::StructDef(s)      => body.push_str(&self.gen_struct_def(s)?),
-                Item::FnDef(f)          => body.push_str(&self.gen_fn(f)?),
-                Item::MiddlewareDef(m)  => body.push_str(&self.gen_middleware(m)?),
-                Item::RouteDef(_)       => {}
-                Item::Import(_)         => {}
+                Item::StructDef(s) => body.push_str(&self.gen_struct_def(s)?),
+                Item::FnDef(f) => body.push_str(&self.gen_fn(f)?),
+                Item::MiddlewareDef(m) => body.push_str(&self.gen_middleware(m)?),
+                Item::RouteDef(_) => {}
+                Item::Import(_) => {}
             }
         }
 
@@ -85,8 +87,8 @@ impl Codegen {
 
         for item in &program.items {
             match item {
-                Item::FnDef(f)         => self.scan_block_imports(&f.body, Ctx::Fn),
-                Item::RouteDef(r)      => {
+                Item::FnDef(f) => self.scan_block_imports(&f.body, Ctx::Fn),
+                Item::RouteDef(r) => {
                     if block_uses_body(&r.body) {
                         self.go_imports.insert("encoding/json".into());
                     }
@@ -108,14 +110,18 @@ impl Codegen {
         match stmt {
             Stmt::Return(exprs) => {
                 if ctx == Ctx::Route {
-                    if let Some(e) = exprs.first() { self.scan_route_return_imports(e); }
+                    if let Some(e) = exprs.first() {
+                        self.scan_route_return_imports(e);
+                    }
                 } else {
-                    for e in exprs { self.scan_expr_imports(e); }
+                    for e in exprs {
+                        self.scan_expr_imports(e);
+                    }
                 }
             }
-            Stmt::Expr(e)        => self.scan_expr_imports(e),
-            Stmt::Let(l)         => self.scan_expr_imports(&l.value),
-            Stmt::LetMulti(l)    => self.scan_expr_imports(&l.value),
+            Stmt::Expr(e) => self.scan_expr_imports(e),
+            Stmt::Let(l) => self.scan_expr_imports(&l.value),
+            Stmt::LetMulti(l) => self.scan_expr_imports(&l.value),
             Stmt::If(i) => {
                 self.scan_block_imports(&i.then_block, ctx);
                 if let Some(eb) = &i.else_block {
@@ -129,14 +135,18 @@ impl Codegen {
         match expr {
             Expr::Call(call) if is_builtin(&call.callee, "json") => {
                 self.go_imports.insert("encoding/json".into());
-                for arg in &call.args { self.scan_expr_imports(arg); }
+                for arg in &call.args {
+                    self.scan_expr_imports(arg);
+                }
             }
             Expr::Call(call) if is_builtin(&call.callee, "status") => {
                 if let Some(body) = call.args.get(1) {
                     self.scan_route_return_imports(body);
                 }
             }
-            other => { self.scan_expr_imports(other); }
+            other => {
+                self.scan_expr_imports(other);
+            }
         }
     }
 
@@ -146,7 +156,9 @@ impl Codegen {
                 if is_builtin(&call.callee, "set_ctx") {
                     self.go_imports.insert("context".into());
                 }
-                for arg in &call.args { self.scan_expr_imports(arg); }
+                for arg in &call.args {
+                    self.scan_expr_imports(arg);
+                }
             }
             // req.ctx["X"] — leitura do contexto
             Expr::Index(obj, _) => {
@@ -159,20 +171,35 @@ impl Codegen {
                 }
                 self.scan_expr_imports(obj);
             }
-            Expr::BinOp(l, _, r) => { self.scan_expr_imports(l); self.scan_expr_imports(r); }
+            Expr::BinOp(l, _, r) => {
+                self.scan_expr_imports(l);
+                self.scan_expr_imports(r);
+            }
             Expr::Unary(_, e) | Expr::FieldAccess(e, _) => self.scan_expr_imports(e),
             _ => {}
         }
     }
 
     fn gen_imports(&self) -> String {
-        if self.go_imports.is_empty() { return String::new(); }
+        if self.go_imports.is_empty() {
+            return String::new();
+        }
         let mut s = String::from("import (\n");
-        let std_pkgs: Vec<_> = self.go_imports.iter().filter(|p| !p.contains('.')).collect();
+        let std_pkgs: Vec<_> = self
+            .go_imports
+            .iter()
+            .filter(|p| !p.contains('.'))
+            .collect();
         let ext_pkgs: Vec<_> = self.go_imports.iter().filter(|p| p.contains('.')).collect();
-        for pkg in &std_pkgs { s.push_str(&format!("\t\"{}\"\n", pkg)); }
-        if !std_pkgs.is_empty() && !ext_pkgs.is_empty() { s.push('\n'); }
-        for pkg in &ext_pkgs { s.push_str(&format!("\t\"{}\"\n", pkg)); }
+        for pkg in &std_pkgs {
+            s.push_str(&format!("\t\"{}\"\n", pkg));
+        }
+        if !std_pkgs.is_empty() && !ext_pkgs.is_empty() {
+            s.push('\n');
+        }
+        for pkg in &ext_pkgs {
+            s.push_str(&format!("\t\"{}\"\n", pkg));
+        }
         s.push_str(")\n\n");
         s
     }
@@ -196,16 +223,24 @@ impl Codegen {
     // --- funções ---
 
     fn gen_fn(&self, f: &FnDef) -> Result<String, CodegenError> {
-        let params = f.params.iter()
+        let params = f
+            .params
+            .iter()
             .map(|p| format!("{} {}", p.name, go_type(&p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
 
         let ret = match &f.return_type {
-            ReturnType::None         => infer_fn_return(&f.body).map(|t| format!(" {}", t)).unwrap_or_default(),
-            ReturnType::Single(t)    => format!(" {}", go_type(t)),
+            ReturnType::None => infer_fn_return(&f.body)
+                .map(|t| format!(" {}", t))
+                .unwrap_or_default(),
+            ReturnType::Single(t) => format!(" {}", go_type(t)),
             ReturnType::Tuple(types) => {
-                let ts = types.iter().map(|t| go_type(t)).collect::<Vec<_>>().join(", ");
+                let ts = types
+                    .iter()
+                    .map(|t| go_type(t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 format!(" ({ts})")
             }
         };
@@ -247,10 +282,10 @@ impl Codegen {
 
     fn gen_route_registration(&self, route: &RouteDef) -> Result<String, CodegenError> {
         let method = match route.method {
-            HttpMethod::Get    => "Get",
-            HttpMethod::Post   => "Post",
-            HttpMethod::Put    => "Put",
-            HttpMethod::Patch  => "Patch",
+            HttpMethod::Get => "Get",
+            HttpMethod::Post => "Post",
+            HttpMethod::Put => "Put",
+            HttpMethod::Patch => "Patch",
             HttpMethod::Delete => "Delete",
         };
         let path = route.path.to_string();
@@ -293,37 +328,60 @@ impl Codegen {
         Ok(s)
     }
 
-    fn gen_stmt(&self, stmt: &Stmt, ctx: Ctx, indent: usize, declared: &mut HashSet<String>) -> Result<String, CodegenError> {
+    fn gen_stmt(
+        &self,
+        stmt: &Stmt,
+        ctx: Ctx,
+        indent: usize,
+        declared: &mut HashSet<String>,
+    ) -> Result<String, CodegenError> {
         match stmt {
-            Stmt::Return(exprs)  => self.gen_return(exprs, ctx),
+            Stmt::Return(exprs) => self.gen_return(exprs, ctx),
             Stmt::Let(l) => {
-                let op = if declared.contains(&l.name) { "=" } else { ":=" };
+                let op = if declared.contains(&l.name) {
+                    "="
+                } else {
+                    ":="
+                };
                 declared.insert(l.name.clone());
-                Ok(format!("{} {} {}", l.name, op, self.gen_expr(&l.value, ctx)?))
+                Ok(format!(
+                    "{} {} {}",
+                    l.name,
+                    op,
+                    self.gen_expr(&l.value, ctx)?
+                ))
             }
             Stmt::LetMulti(l) => {
                 // Go exige ao menos um nome novo para :=; se todos já existem, usa =
                 let all_declared = l.names.iter().all(|n| declared.contains(n));
                 let op = if all_declared { "=" } else { ":=" };
-                for n in &l.names { declared.insert(n.clone()); }
-                Ok(format!("{} {} {}", l.names.join(", "), op, self.gen_expr(&l.value, ctx)?))
+                for n in &l.names {
+                    declared.insert(n.clone());
+                }
+                Ok(format!(
+                    "{} {} {}",
+                    l.names.join(", "),
+                    op,
+                    self.gen_expr(&l.value, ctx)?
+                ))
             }
-            Stmt::If(i)          => self.gen_if(i, ctx, indent),
-            Stmt::Expr(e)        => self.gen_expr(e, ctx),
+            Stmt::If(i) => self.gen_if(i, ctx, indent),
+            Stmt::Expr(e) => self.gen_expr(e, ctx),
         }
     }
 
     fn gen_return(&self, exprs: &[Expr], ctx: Ctx) -> Result<String, CodegenError> {
         match ctx {
-            Ctx::Fn | Ctx::Middleware => {
-                let vals = exprs.iter()
+            Ctx::Fn => {
+                let vals = exprs
+                    .iter()
                     .map(|e| self.gen_expr(e, ctx))
                     .collect::<Result<Vec<_>, _>>()?
                     .join(", ");
                 Ok(format!("return {}", vals))
             }
-            Ctx::Route => {
-                // em rota, apenas o primeiro valor importa para a resposta
+            // Middleware e Route têm acesso a w/r e devem escrever resposta HTTP
+            Ctx::Route | Ctx::Middleware => {
                 let response = self.gen_route_response(&exprs[0])?;
                 Ok(format!("{}\nreturn", response))
             }
@@ -333,7 +391,9 @@ impl Codegen {
     fn gen_route_response(&self, expr: &Expr) -> Result<String, CodegenError> {
         match expr {
             Expr::Call(call) if is_builtin(&call.callee, "json") => {
-                let arg = call.args.first()
+                let arg = call
+                    .args
+                    .first()
                     .ok_or_else(|| CodegenError::new("json() requer um argumento"))?;
                 Ok(format!(
                     "w.Header().Set(\"Content-Type\", \"application/json\")\njson.NewEncoder(w).Encode({})",
@@ -341,12 +401,19 @@ impl Codegen {
                 ))
             }
             Expr::Call(call) if is_builtin(&call.callee, "text") => {
-                let arg = call.args.first()
+                let arg = call
+                    .args
+                    .first()
                     .ok_or_else(|| CodegenError::new("text() requer um argumento"))?;
-                Ok(format!("fmt.Fprint(w, {})", self.gen_expr(arg, Ctx::Route)?))
+                Ok(format!(
+                    "fmt.Fprint(w, {})",
+                    self.gen_expr(arg, Ctx::Route)?
+                ))
             }
             Expr::Call(call) if is_builtin(&call.callee, "status") => {
-                let code = call.args.first()
+                let code = call
+                    .args
+                    .first()
                     .ok_or_else(|| CodegenError::new("status() requer o código HTTP"))?;
                 let mut s = format!("w.WriteHeader({})", self.gen_expr(code, Ctx::Route)?);
                 if let Some(body) = call.args.get(1) {
@@ -355,7 +422,10 @@ impl Codegen {
                 }
                 Ok(s)
             }
-            other => Ok(format!("fmt.Fprint(w, {})", self.gen_expr(other, Ctx::Route)?)),
+            other => Ok(format!(
+                "fmt.Fprint(w, {})",
+                self.gen_expr(other, Ctx::Route)?
+            )),
         }
     }
 
@@ -367,20 +437,28 @@ impl Codegen {
         let then_body = self.gen_block(&i.then_block, ctx, indent + 1)?;
 
         // remove o pad externo já que gen_stmt vai adicioná-lo
-        let then_body = then_body.lines()
+        let then_body = then_body
+            .lines()
             .map(|l| l.strip_prefix(&inner_pad).unwrap_or(l))
             .collect::<Vec<_>>()
             .join(&format!("\n{}", inner_pad));
 
-        let mut s = format!("if {} {{\n{}{}\n{}}}", cond, inner_pad, then_body, outer_pad);
+        let mut s = format!(
+            "if {} {{\n{}{}\n{}}}",
+            cond, inner_pad, then_body, outer_pad
+        );
 
         if let Some(else_block) = &i.else_block {
             let else_body = self.gen_block(else_block, ctx, indent + 1)?;
-            let else_body = else_body.lines()
+            let else_body = else_body
+                .lines()
                 .map(|l| l.strip_prefix(&inner_pad).unwrap_or(l))
                 .collect::<Vec<_>>()
                 .join(&format!("\n{}", inner_pad));
-            s.push_str(&format!(" else {{\n{}{}\n{}}}", inner_pad, else_body, outer_pad));
+            s.push_str(&format!(
+                " else {{\n{}{}\n{}}}",
+                inner_pad, else_body, outer_pad
+            ));
         }
 
         Ok(s)
@@ -390,21 +468,26 @@ impl Codegen {
 
     fn gen_expr(&self, expr: &Expr, ctx: Ctx) -> Result<String, CodegenError> {
         match expr {
-            Expr::Lit(lit)            => Ok(gen_lit(lit)),
-            Expr::Nil                 => Ok("nil".into()),
-            Expr::Ident(name)         => Ok(name.clone()),
-            Expr::Call(call)          => self.gen_call(call, ctx),
+            Expr::Lit(lit) => Ok(gen_lit(lit)),
+            Expr::Nil => Ok("nil".into()),
+            Expr::Ident(name) => Ok(name.clone()),
+            Expr::Call(call) => self.gen_call(call, ctx),
             Expr::FieldAccess(obj, f) => self.gen_field_access(obj, f, ctx),
-            Expr::Index(obj, idx)     => self.gen_index(obj, idx, ctx),
+            Expr::Index(obj, idx) => self.gen_index(obj, idx, ctx),
             Expr::BinOp(l, op, r) => Ok(format!(
                 "{} {} {}",
-                self.gen_expr(l, ctx)?, go_binop(op), self.gen_expr(r, ctx)?
+                self.gen_expr(l, ctx)?,
+                go_binop(op),
+                self.gen_expr(r, ctx)?
             )),
             Expr::Unary(op, e) => {
-                let go_op = match op { UnaryOp::Not => "!", UnaryOp::Neg => "-" };
+                let go_op = match op {
+                    UnaryOp::Not => "!",
+                    UnaryOp::Neg => "-",
+                };
                 Ok(format!("{}{}", go_op, self.gen_expr(e, ctx)?))
             }
-            Expr::MapLit(m)    => self.gen_map_lit(m, ctx),
+            Expr::MapLit(m) => self.gen_map_lit(m, ctx),
             Expr::StructInit(s) => self.gen_struct_init(s, ctx),
         }
     }
@@ -426,7 +509,9 @@ impl Codegen {
                 // req.method, req.url, etc. — acesso direto ao r
                 return Ok(format!("r.{}", capitalize(field)));
             }
-            if self.user_aliases.contains(name.as_str()) || self.stdlib_aliases.contains(name.as_str()) {
+            if self.user_aliases.contains(name.as_str())
+                || self.stdlib_aliases.contains(name.as_str())
+            {
                 return Ok(format!("{}.{}", name, field));
             }
         }
@@ -437,29 +522,37 @@ impl Codegen {
         }
 
         // campo de struct do usuário → capitaliza
-        Ok(format!("{}.{}", self.gen_expr(obj, ctx)?, capitalize(field)))
+        Ok(format!(
+            "{}.{}",
+            self.gen_expr(obj, ctx)?,
+            capitalize(field)
+        ))
     }
 
     fn gen_index(&self, obj: &Expr, idx: &Expr, ctx: Ctx) -> Result<String, CodegenError> {
         // req.headers["X"] → r.Header.Get("X")
         // req.query["X"]   → r.URL.Query().Get("X")
-        // req.body["X"]    → _huskBody["X"]
-        // req.ctx["X"]     → r.Context().Value("X")
+        // req.body["X"]    → _huskBody["X"].(string)
+        // req.ctx["X"]     → fmt.Sprintf("%v", r.Context().Value("X"))
         if let Expr::FieldAccess(inner, field) = obj {
             if let Expr::Ident(name) = inner.as_ref() {
                 if name == "req" {
                     let key = self.gen_expr(idx, ctx)?;
                     return Ok(match field.as_str() {
                         "headers" => format!("r.Header.Get({})", key),
-                        "query"   => format!("r.URL.Query().Get({})", key),
-                        "body"    => format!("_huskBody[{}]", key),
-                        "ctx"     => format!("r.Context().Value({})", key),
-                        _         => format!("r.{}[{}]", capitalize(field), key),
+                        "query" => format!("r.URL.Query().Get({})", key),
+                        "body" => format!("_huskBody[{}].(string)", key),
+                        "ctx" => format!("r.Context().Value({})", key),
+                        _ => format!("r.{}[{}]", capitalize(field), key),
                     });
                 }
             }
         }
-        Ok(format!("{}[{}]", self.gen_expr(obj, ctx)?, self.gen_expr(idx, ctx)?))
+        Ok(format!(
+            "{}[{}]",
+            self.gen_expr(obj, ctx)?,
+            self.gen_expr(idx, ctx)?
+        ))
     }
 
     fn gen_call(&self, call: &CallExpr, ctx: Ctx) -> Result<String, CodegenError> {
@@ -473,9 +566,13 @@ impl Codegen {
         // set_ctx("key", valor) → ctx := context.WithValue(r.Context(), "key", valor)
         //                         r = r.WithContext(ctx)
         if is_builtin(&call.callee, "set_ctx") {
-            let key = call.args.first()
+            let key = call
+                .args
+                .first()
                 .ok_or_else(|| CodegenError::new("set_ctx() requer uma chave string"))?;
-            let val = call.args.get(1)
+            let val = call
+                .args
+                .get(1)
                 .ok_or_else(|| CodegenError::new("set_ctx() requer um valor"))?;
             let key_go = self.gen_expr(key, ctx)?;
             let val_go = self.gen_expr(val, ctx)?;
@@ -513,7 +610,9 @@ impl Codegen {
     }
 
     fn gen_map_lit(&self, m: &MapLit, ctx: Ctx) -> Result<String, CodegenError> {
-        let fields = m.fields.iter()
+        let fields = m
+            .fields
+            .iter()
             .map(|(k, v)| Ok(format!("\"{}\": {}", k, self.gen_expr(v, ctx)?)))
             .collect::<Result<Vec<_>, CodegenError>>()?
             .join(", ");
@@ -521,7 +620,9 @@ impl Codegen {
     }
 
     fn gen_struct_init(&self, s: &StructInit, ctx: Ctx) -> Result<String, CodegenError> {
-        let fields = s.fields.iter()
+        let fields = s
+            .fields
+            .iter()
             .map(|(k, v)| Ok(format!("{}: {}", capitalize(k), self.gen_expr(v, ctx)?)))
             .collect::<Result<Vec<_>, CodegenError>>()?
             .join(", ");
@@ -533,32 +634,40 @@ impl Codegen {
 
 fn gen_lit(lit: &Lit) -> String {
     match lit {
-        Lit::Int(n)   => n.to_string(),
+        Lit::Int(n) => n.to_string(),
         Lit::Float(f) => format!("{}", f),
-        Lit::Str(s)   => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
-        Lit::Bool(b)  => b.to_string(),
+        Lit::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Lit::Bool(b) => b.to_string(),
     }
 }
 
 fn go_type(ty: &Type) -> String {
     match ty {
-        Type::Int         => "int".into(),
-        Type::Float       => "float64".into(),
-        Type::String      => "string".into(),
-        Type::Bool        => "bool".into(),
-        Type::Error       => "error".into(),
-        Type::Map         => "map[string]interface{}".into(),
+        Type::Int => "int".into(),
+        Type::Float => "float64".into(),
+        Type::String => "string".into(),
+        Type::Bool => "bool".into(),
+        Type::Error => "error".into(),
+        Type::Map => "map[string]interface{}".into(),
         Type::List(inner) => format!("[]{}", go_type(inner)),
-        Type::Named(n)    => n.clone(),
+        Type::Named(n) => n.clone(),
     }
 }
 
 fn go_binop(op: &BinOp) -> &'static str {
     match op {
-        BinOp::Add => "+",  BinOp::Sub   => "-",  BinOp::Mul   => "*",
-        BinOp::Div => "/",  BinOp::Mod   => "%",  BinOp::Eq    => "==",
-        BinOp::NotEq => "!=", BinOp::Lt  => "<",  BinOp::Gt    => ">",
-        BinOp::LtEq => "<=", BinOp::GtEq => ">=", BinOp::And  => "&&",
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Mod => "%",
+        BinOp::Eq => "==",
+        BinOp::NotEq => "!=",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::LtEq => "<=",
+        BinOp::GtEq => ">=",
+        BinOp::And => "&&",
         BinOp::Or => "||",
     }
 }
@@ -570,7 +679,7 @@ fn is_builtin(expr: &Expr, name: &str) -> bool {
 fn capitalize(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
-        None    => String::new(),
+        None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
@@ -581,12 +690,13 @@ fn block_uses_body(block: &Block) -> bool {
 
 fn stmt_uses_body(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Return(exprs)  => exprs.iter().any(expr_uses_body),
-        Stmt::Let(l)         => expr_uses_body(&l.value),
-        Stmt::LetMulti(l)    => expr_uses_body(&l.value),
-        Stmt::Expr(e)        => expr_uses_body(e),
-        Stmt::If(i)          => block_uses_body(&i.then_block)
-            || i.else_block.as_ref().map_or(false, block_uses_body),
+        Stmt::Return(exprs) => exprs.iter().any(expr_uses_body),
+        Stmt::Let(l) => expr_uses_body(&l.value),
+        Stmt::LetMulti(l) => expr_uses_body(&l.value),
+        Stmt::Expr(e) => expr_uses_body(e),
+        Stmt::If(i) => {
+            block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
+        }
     }
 }
 
@@ -600,11 +710,11 @@ fn expr_uses_body(expr: &Expr) -> bool {
             }
             false
         }
-        Expr::Call(c)              => expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body),
-        Expr::FieldAccess(e, _)    => expr_uses_body(e),
-        Expr::BinOp(l, _, r)      => expr_uses_body(l) || expr_uses_body(r),
-        Expr::Unary(_, e)          => expr_uses_body(e),
-        _                          => false,
+        Expr::Call(c) => expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body),
+        Expr::FieldAccess(e, _) => expr_uses_body(e),
+        Expr::BinOp(l, _, r) => expr_uses_body(l) || expr_uses_body(r),
+        Expr::Unary(_, e) => expr_uses_body(e),
+        _ => false,
     }
 }
 
@@ -613,11 +723,11 @@ fn infer_fn_return(block: &Block) -> Option<&'static str> {
         if let Stmt::Return(exprs) = stmt {
             if let Some(expr) = exprs.first() {
                 return Some(match expr {
-                    Expr::Lit(Lit::Str(_))   => "string",
-                    Expr::Lit(Lit::Int(_))   => "int",
+                    Expr::Lit(Lit::Str(_)) => "string",
+                    Expr::Lit(Lit::Int(_)) => "int",
                     Expr::Lit(Lit::Float(_)) => "float64",
-                    Expr::Lit(Lit::Bool(_))  => "bool",
-                    _                        => "interface{}",
+                    Expr::Lit(Lit::Bool(_)) => "bool",
+                    _ => "interface{}",
                 });
             }
         }
@@ -639,14 +749,16 @@ mod tests {
 
     #[test]
     fn test_programa_completo() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn greeting() {
     return "Hello, World!"
 }
 route GET /hello {
     return greeting()
 }
-"#);
+"#,
+        );
         assert!(go.contains("func greeting() string {"));
         assert!(go.contains("r.Get(\"/hello\""));
         assert!(go.contains("fmt.Fprint(w, greeting())"));
@@ -669,7 +781,8 @@ route GET /hello {
 
     #[test]
     fn test_tipo_map_e_list() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn buscar(email string) (map, error) {
     return nil, nil
 }
@@ -677,28 +790,32 @@ fn buscar(email string) (map, error) {
 fn listar() ([]map, error) {
     return nil, nil
 }
-"#);
+"#,
+        );
         assert!(go.contains("func buscar(email string) (map[string]interface{}, error)"));
         assert!(go.contains("func listar() ([]map[string]interface{}, error)"));
     }
 
     #[test]
     fn test_if_simples() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn checar(x int) string {
     if x == 0 {
         return "zero"
     }
     return "outro"
 }
-"#);
+"#,
+        );
         assert!(go.contains("if x == 0 {"));
         assert!(go.contains("return \"zero\""));
     }
 
     #[test]
     fn test_if_else() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn checar(x int) string {
     if x == 0 {
         return "zero"
@@ -706,24 +823,28 @@ fn checar(x int) string {
         return "outro"
     }
 }
-"#);
+"#,
+        );
         assert!(go.contains("} else {"));
     }
 
     #[test]
     fn test_nil() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn buscar(id int) (string, error) {
     return "ok", nil
 }
-"#);
+"#,
+        );
         assert!(go.contains("(string, error)"));
         assert!(go.contains("return \"ok\", nil"));
     }
 
     #[test]
     fn test_let_multi() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn buscar(id int) (string, error) {
     return "x", nil
 }
@@ -731,19 +852,22 @@ fn f() string {
     let val, err = buscar(1)
     return val
 }
-"#);
+"#,
+        );
         assert!(go.contains("val, err := buscar(1)"));
     }
 
     #[test]
     fn test_shadowing_simples() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn f() string {
     let err = "primeiro"
     let err = "segundo"
     return err
 }
-"#);
+"#,
+        );
         // primeira declaração: :=, segunda: =
         assert!(go.contains("err := \"primeiro\""));
         assert!(go.contains("err = \"segundo\""));
@@ -751,14 +875,16 @@ fn f() string {
 
     #[test]
     fn test_shadowing_multi() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn buscar(x int) (string, error) { return "x", nil }
 fn f() string {
     let a, err = buscar(1)
     let b, err = buscar(2)
     return a
 }
-"#);
+"#,
+        );
         // primeira: := (a e err são novos)
         assert!(go.contains("a, err := buscar(1)"));
         // segunda: := (b é novo, mesmo err já existindo — Go aceita)
@@ -767,14 +893,16 @@ fn f() string {
 
     #[test]
     fn test_shadowing_multi_todos_existentes() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn buscar(x int) (string, error) { return "x", nil }
 fn f() string {
     let a, err = buscar(1)
     let a, err = buscar(2)
     return a
 }
-"#);
+"#,
+        );
         assert!(go.contains("a, err := buscar(1)"));
         // ambos já declarados → =
         assert!(go.contains("a, err = buscar(2)"));
@@ -782,35 +910,41 @@ fn f() string {
 
     #[test]
     fn test_req_params() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 route GET /users/:id {
     let id = req.params.id
     return id
 }
-"#);
+"#,
+        );
         assert!(go.contains("chi.URLParam(r, \"id\")"));
     }
 
     #[test]
     fn test_req_headers() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 route GET /secure {
     let token = req.headers["Authorization"]
     return token
 }
-"#);
+"#,
+        );
         assert!(go.contains("r.Header.Get(\"Authorization\")"));
     }
 
     #[test]
     fn test_req_body() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 route POST /login {
     let email = req.body["email"]
     let senha = req.body["senha"]
     return json({ ok: true })
 }
-"#);
+"#,
+        );
         assert!(go.contains("var _huskBody map[string]interface{}"));
         assert!(go.contains("json.NewDecoder(r.Body).Decode(&_huskBody)"));
         assert!(go.contains("_huskBody[\"email\"]"));
@@ -820,25 +954,29 @@ route POST /login {
 
     #[test]
     fn test_req_query() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 route GET /search {
     let q = req.query["q"]
     return q
 }
-"#);
+"#,
+        );
         assert!(go.contains("r.URL.Query().Get(\"q\")"));
     }
 
     #[test]
     fn test_middleware() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 middleware autenticado {
     next()
 }
 route GET /perfil [autenticado] {
     return "ok"
 }
-"#);
+"#,
+        );
         assert!(go.contains("func autenticado(next http.Handler) http.Handler {"));
         assert!(go.contains("next.ServeHTTP(w, r)"));
         assert!(go.contains("r.With(autenticado).Get(\"/perfil\""));
@@ -846,7 +984,8 @@ route GET /perfil [autenticado] {
 
     #[test]
     fn test_req_ctx_escrita_e_leitura() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 middleware autenticado {
     set_ctx("user_id", "42")
     next()
@@ -855,7 +994,8 @@ route GET /perfil [autenticado] {
     let uid = req.ctx["user_id"]
     return uid
 }
-"#);
+"#,
+        );
         // escrita no middleware
         assert!(go.contains("_huskCtx := context.WithValue(r.Context(), \"user_id\", \"42\")"));
         assert!(go.contains("r = r.WithContext(_huskCtx)"));
@@ -867,7 +1007,8 @@ route GET /perfil [autenticado] {
 
     #[test]
     fn test_erro_message() {
-        let go = codegen(r#"
+        let go = codegen(
+            r#"
 fn f() string {
     let val, err = buscar(1)
     if err != nil {
@@ -875,7 +1016,8 @@ fn f() string {
     }
     return val
 }
-"#);
+"#,
+        );
         assert!(go.contains("err.Error()"));
         assert!(go.contains("err != nil"));
     }
