@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "husk-analyzer"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "husk-lexer",
  "husk-parser",
@@ -12,7 +12,7 @@ dependencies = [
 
 [[package]]
 name = "husk-cli"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "husk-analyzer",
  "husk-codegen",
@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "husk-codegen"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "husk-lexer",
  "husk-parser",
@@ -30,11 +30,11 @@ dependencies = [
 
 [[package]]
 name = "husk-lexer"
-version = "0.1.0"
+version = "1.0.1"
 
 [[package]]
 name = "husk-parser"
-version = "0.1.0"
+version = "1.0.1"
 dependencies = [
  "husk-lexer",
 ]

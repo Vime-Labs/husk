@@ -20,7 +20,7 @@ impl Checker {
     pub fn new() -> Self {
         let mut global = Scope::new();
         // Built-in functions disponíveis em qualquer escopo
-        for builtin in &["json", "text", "status"] {
+        for builtin in &["json", "text", "status", "set_ctx"] {
             let _ = global.declare(
                 builtin,
                 Symbol::Function(FnSignature {
@@ -354,7 +354,7 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" => return Some(TypeInfo::Unknown),
+            "json" | "text" | "status" | "set_ctx" => return Some(TypeInfo::Unknown),
             _ => {}
         }
 
@@ -550,7 +550,7 @@ impl Checker {
 
         match op {
             UnaryOp::Not => {
-                if !matches!(inner_ty, TypeInfo::Bool) {
+                if !matches!(inner_ty, TypeInfo::Bool | TypeInfo::Unknown) {
                     self.errors.push(SemanticError::new(
                         "! só pode ser usado em expressões bool",
                         Span { line: 0, col: 0 },
