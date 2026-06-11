@@ -61,21 +61,22 @@ pub enum TokenKind {
     Dot,       // .
     Slash,     // /
     Bang,      // !
+    Question,  // ?
 
     // Operadores
-    Eq,        // =
-    EqEq,      // ==
-    NotEq,     // !=
-    Lt,        // <
-    Gt,        // >
-    LtEq,      // <=
-    GtEq,      // >=
-    Plus,      // +
-    Minus,     // -
-    Star,      // *
-    Percent,   // %
-    And,       // &&
-    Or,        // ||
+    Eq,      // =
+    EqEq,    // ==
+    NotEq,   // !=
+    Lt,      // <
+    Gt,      // >
+    LtEq,    // <=
+    GtEq,    // >=
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Percent, // %
+    And,     // &&
+    Or,      // ||
 
     // Fim de arquivo
     Eof,

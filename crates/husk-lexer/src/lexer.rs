@@ -36,27 +36,75 @@ impl Lexer {
         let span = self.span();
 
         if self.pos >= self.input.len() {
-            return Ok(Token { kind: TokenKind::Eof, span });
+            return Ok(Token {
+                kind: TokenKind::Eof,
+                span,
+            });
         }
 
         let ch = self.current();
 
         let kind = match ch {
-            '{' => { self.advance(); TokenKind::LBrace }
-            '}' => { self.advance(); TokenKind::RBrace }
-            '(' => { self.advance(); TokenKind::LParen }
-            ')' => { self.advance(); TokenKind::RParen }
-            '[' => { self.advance(); TokenKind::LBracket }
-            ']' => { self.advance(); TokenKind::RBracket }
-            ',' => { self.advance(); TokenKind::Comma }
-            ':' => { self.advance(); TokenKind::Colon }
-            ';' => { self.advance(); TokenKind::Semicolon }
-            '.' => { self.advance(); TokenKind::Dot }
-            '%' => { self.advance(); TokenKind::Percent }
-            '*' => { self.advance(); TokenKind::Star }
-            '+' => { self.advance(); TokenKind::Plus }
-            '-' => { self.advance(); TokenKind::Minus }
-            '/' => { self.advance(); TokenKind::Slash }
+            '{' => {
+                self.advance();
+                TokenKind::LBrace
+            }
+            '}' => {
+                self.advance();
+                TokenKind::RBrace
+            }
+            '(' => {
+                self.advance();
+                TokenKind::LParen
+            }
+            ')' => {
+                self.advance();
+                TokenKind::RParen
+            }
+            '[' => {
+                self.advance();
+                TokenKind::LBracket
+            }
+            ']' => {
+                self.advance();
+                TokenKind::RBracket
+            }
+            ',' => {
+                self.advance();
+                TokenKind::Comma
+            }
+            ':' => {
+                self.advance();
+                TokenKind::Colon
+            }
+            ';' => {
+                self.advance();
+                TokenKind::Semicolon
+            }
+            '.' => {
+                self.advance();
+                TokenKind::Dot
+            }
+            '%' => {
+                self.advance();
+                TokenKind::Percent
+            }
+            '*' => {
+                self.advance();
+                TokenKind::Star
+            }
+            '+' => {
+                self.advance();
+                TokenKind::Plus
+            }
+            '-' => {
+                self.advance();
+                TokenKind::Minus
+            }
+            '/' => {
+                self.advance();
+                TokenKind::Slash
+            }
             '!' => {
                 self.advance();
                 if self.current_is('=') {
@@ -65,6 +113,10 @@ impl Lexer {
                 } else {
                     TokenKind::Bang
                 }
+            }
+            '?' => {
+                self.advance();
+                TokenKind::Question
             }
             '=' => {
                 self.advance();
@@ -125,10 +177,16 @@ impl Lexer {
         let mut s = String::new();
         loop {
             if self.pos >= self.input.len() {
-                return Err(LexError { message: "string não fechada".into(), span: self.span() });
+                return Err(LexError {
+                    message: "string não fechada".into(),
+                    span: self.span(),
+                });
             }
             match self.current() {
-                '"' => { self.advance(); break; }
+                '"' => {
+                    self.advance();
+                    break;
+                }
                 '\\' => {
                     self.advance();
                     let escaped = match self.current() {
@@ -137,15 +195,20 @@ impl Lexer {
                         'r' => '\r',
                         '"' => '"',
                         '\\' => '\\',
-                        c => return Err(LexError {
-                            message: format!("escape inválido: \\{}", c),
-                            span: self.span(),
-                        }),
+                        c => {
+                            return Err(LexError {
+                                message: format!("escape inválido: \\{}", c),
+                                span: self.span(),
+                            });
+                        }
                     };
                     s.push(escaped);
                     self.advance();
                 }
-                c => { s.push(c); self.advance(); }
+                c => {
+                    s.push(c);
+                    self.advance();
+                }
             }
         }
         Ok(TokenKind::Str(s))
@@ -184,36 +247,38 @@ impl Lexer {
 
     fn lex_ident_or_keyword(&mut self) -> TokenKind {
         let mut ident = String::new();
-        while self.pos < self.input.len() && (self.current().is_alphanumeric() || self.current() == '_') {
+        while self.pos < self.input.len()
+            && (self.current().is_alphanumeric() || self.current() == '_')
+        {
             ident.push(self.current());
             self.advance();
         }
 
         match ident.as_str() {
-            "fn"         => TokenKind::Fn,
-            "return"     => TokenKind::Return,
-            "let"        => TokenKind::Let,
-            "if"         => TokenKind::If,
-            "else"       => TokenKind::Else,
-            "route"      => TokenKind::Route,
+            "fn" => TokenKind::Fn,
+            "return" => TokenKind::Return,
+            "let" => TokenKind::Let,
+            "if" => TokenKind::If,
+            "else" => TokenKind::Else,
+            "route" => TokenKind::Route,
             "middleware" => TokenKind::Middleware,
-            "next"       => TokenKind::Next,
-            "import"     => TokenKind::Import,
-            "as"         => TokenKind::As,
-            "struct"     => TokenKind::Struct,
-            "GET"        => TokenKind::Get,
-            "POST"       => TokenKind::Post,
-            "PUT"        => TokenKind::Put,
-            "PATCH"      => TokenKind::Patch,
-            "DELETE"     => TokenKind::Delete,
-            "int"        => TokenKind::TyInt,
-            "string"     => TokenKind::TyString,
-            "bool"       => TokenKind::TyBool,
-            "float"      => TokenKind::TyFloat,
-            "true"       => TokenKind::Bool(true),
-            "false"      => TokenKind::Bool(false),
-            "nil"        => TokenKind::Nil,
-            _            => TokenKind::Ident(ident),
+            "next" => TokenKind::Next,
+            "import" => TokenKind::Import,
+            "as" => TokenKind::As,
+            "struct" => TokenKind::Struct,
+            "GET" => TokenKind::Get,
+            "POST" => TokenKind::Post,
+            "PUT" => TokenKind::Put,
+            "PATCH" => TokenKind::Patch,
+            "DELETE" => TokenKind::Delete,
+            "int" => TokenKind::TyInt,
+            "string" => TokenKind::TyString,
+            "bool" => TokenKind::TyBool,
+            "float" => TokenKind::TyFloat,
+            "true" => TokenKind::Bool(true),
+            "false" => TokenKind::Bool(false),
+            "nil" => TokenKind::Nil,
+            _ => TokenKind::Ident(ident),
         }
     }
 
@@ -265,7 +330,10 @@ impl Lexer {
     }
 
     fn span(&self) -> Span {
-        Span { line: self.line, col: self.col }
+        Span {
+            line: self.line,
+            col: self.col,
+        }
     }
 }
 
@@ -277,7 +345,10 @@ pub struct LexError {
 
 impl LexError {
     fn unexpected_char(ch: char, span: Span) -> Self {
-        Self { message: format!("caractere inesperado: '{}'", ch), span }
+        Self {
+            message: format!("caractere inesperado: '{}'", ch),
+            span,
+        }
     }
 }
 
@@ -317,62 +388,74 @@ route GET /hello {
     #[test]
     fn test_operators() {
         let tokens = lex("== != <= >= && ||");
-        assert_eq!(tokens, vec![
-            TokenKind::EqEq,
-            TokenKind::NotEq,
-            TokenKind::LtEq,
-            TokenKind::GtEq,
-            TokenKind::And,
-            TokenKind::Or,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::EqEq,
+                TokenKind::NotEq,
+                TokenKind::LtEq,
+                TokenKind::GtEq,
+                TokenKind::And,
+                TokenKind::Or,
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn test_literals() {
         let tokens = lex("42 3.14 true false \"oi\"");
-        assert_eq!(tokens, vec![
-            TokenKind::Int(42),
-            TokenKind::Float(3.14),
-            TokenKind::Bool(true),
-            TokenKind::Bool(false),
-            TokenKind::Str("oi".into()),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Int(42),
+                TokenKind::Float(3.14),
+                TokenKind::Bool(true),
+                TokenKind::Bool(false),
+                TokenKind::Str("oi".into()),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn test_comment_ignored() {
         let tokens = lex("let x = 1 // isso é um comentário\nlet y = 2");
-        assert_eq!(tokens, vec![
-            TokenKind::Let,
-            TokenKind::Ident("x".into()),
-            TokenKind::Eq,
-            TokenKind::Int(1),
-            TokenKind::Let,
-            TokenKind::Ident("y".into()),
-            TokenKind::Eq,
-            TokenKind::Int(2),
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Let,
+                TokenKind::Ident("x".into()),
+                TokenKind::Eq,
+                TokenKind::Int(1),
+                TokenKind::Let,
+                TokenKind::Ident("y".into()),
+                TokenKind::Eq,
+                TokenKind::Int(2),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn test_keywords() {
         let tokens = lex("fn return let if else route middleware next import as struct");
-        assert_eq!(tokens, vec![
-            TokenKind::Fn,
-            TokenKind::Return,
-            TokenKind::Let,
-            TokenKind::If,
-            TokenKind::Else,
-            TokenKind::Route,
-            TokenKind::Middleware,
-            TokenKind::Next,
-            TokenKind::Import,
-            TokenKind::As,
-            TokenKind::Struct,
-            TokenKind::Eof,
-        ]);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Fn,
+                TokenKind::Return,
+                TokenKind::Let,
+                TokenKind::If,
+                TokenKind::Else,
+                TokenKind::Route,
+                TokenKind::Middleware,
+                TokenKind::Next,
+                TokenKind::Import,
+                TokenKind::As,
+                TokenKind::Struct,
+                TokenKind::Eof,
+            ]
+        );
     }
 }

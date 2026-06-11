@@ -127,6 +127,11 @@ impl Codegen {
             Stmt::Expr(e) => self.scan_expr_imports(e),
             Stmt::Let(l) => self.scan_expr_imports(&l.value),
             Stmt::LetMulti(l) => self.scan_expr_imports(&l.value),
+            Stmt::TryLet(t) => {
+                // TryLet usa json e encoding/json
+                self.go_imports.insert("encoding/json".into());
+                self.scan_expr_imports(&t.call);
+            }
             Stmt::If(i) => {
                 self.scan_block_imports(&i.then_block, ctx);
                 if let Some(eb) = &i.else_block {
@@ -371,6 +376,7 @@ impl Codegen {
                 ))
             }
             Stmt::If(i) => self.gen_if(i, ctx, indent),
+            Stmt::TryLet(t) => self.gen_try_let(t, ctx),
             Stmt::Expr(e) => self.gen_expr(e, ctx),
         }
     }
@@ -466,6 +472,37 @@ impl Codegen {
             ));
         }
 
+        Ok(s)
+    }
+
+    /// let x = expr? [status] ["msg"]  — try: propaga erro como resposta HTTP
+    fn gen_try_let(&self, t: &TryLetStmt, ctx: Ctx) -> Result<String, CodegenError> {
+        let call_go = self.gen_expr(&t.call, ctx)?;
+        let err_var = "__try_err";
+
+        let msg = if let Some(msg) = &t.message {
+            format!("\"{}\"", msg.replace('"', "\\\"").replace('\n', "\\n"))
+        } else {
+            format!("{}.Error()", err_var)
+        };
+
+        let code = t.status_code.unwrap_or(500);
+
+        let mut s = format!(
+            "{}, {} := {}\nif {} != nil {{",
+            t.name, err_var, call_go, err_var
+        );
+        s.push_str(&format!("\n\tw.WriteHeader({})", code));
+        s.push_str("\n\tw.Header().Set(\"Content-Type\", \"application/json\")");
+        s.push_str(&format!(
+            "\n\tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+\
+             \t\t\"erro\": {},\
+\
+             \t}})",
+            msg
+        ));
+        s.push_str("\n\treturn\n}\n");
         Ok(s)
     }
 
@@ -707,6 +744,7 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
         Stmt::If(i) => {
             block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
         }
+        Stmt::TryLet(t) => expr_uses_body(&t.call),
     }
 }
 
@@ -1071,5 +1109,53 @@ route POST /login {
 "#,
         );
         assert!(go.contains("_huskBody[\"email\"].(string)"));
+    }
+
+    #[test]
+    fn test_try_let_simples() {
+        let go = codegen(
+            r#"
+fn buscar(id int) string { return "x" }
+route GET /user/:id {
+    let nome = buscar(1)?
+    return nome
+}
+"#,
+        );
+        // Gera: nome, __try_err := buscar(1)
+        assert!(go.contains("nome, __try_err := buscar(1)"));
+        assert!(go.contains("if __try_err != nil"));
+        assert!(go.contains("w.WriteHeader(500)"));
+        assert!(go.contains("\"erro\": __try_err.Error()"));
+        assert!(go.contains("return"));
+    }
+
+    #[test]
+    fn test_try_let_com_status() {
+        let go = codegen(
+            r#"
+fn buscar(id int) string { return "x" }
+route GET /user/:id {
+    let nome = buscar(1)? 404
+    return nome
+}
+"#,
+        );
+        assert!(go.contains("w.WriteHeader(404)"));
+    }
+
+    #[test]
+    fn test_try_let_com_mensagem() {
+        let go = codegen(
+            r#"
+fn buscar(id int) string { return "x" }
+route GET /user/:id {
+    let nome = buscar(1)? 400 "Usuário não encontrado"
+    return nome
+}
+"#,
+        );
+        assert!(go.contains("w.WriteHeader(400)"));
+        assert!(go.contains("\"erro\": \"Usuário não encontrado\""));
     }
 }

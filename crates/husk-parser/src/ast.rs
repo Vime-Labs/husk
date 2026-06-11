@@ -113,7 +113,9 @@ impl RoutePath {
                 }
             }
         }
-        if s.is_empty() { s.push('/'); }
+        if s.is_empty() {
+            s.push('/');
+        }
         s
     }
 }
@@ -130,6 +132,8 @@ pub enum Stmt {
     Let(LetStmt),
     /// let a, b = expr  — multi-atribuição para funções que retornam (valor, error)
     LetMulti(LetMultiStmt),
+    /// let x = expr?  — try com propagação de erro HTTP
+    TryLet(TryLetStmt),
     If(IfStmt),
     Expr(Expr),
 }
@@ -145,6 +149,15 @@ pub struct LetStmt {
 pub struct LetMultiStmt {
     pub names: Vec<String>,
     pub value: Expr,
+}
+
+/// let x = expr?  — try: desestrutura (valor, error) e propaga erro como resposta HTTP
+#[derive(Debug, Clone)]
+pub struct TryLetStmt {
+    pub name: String,
+    pub call: Expr,
+    pub status_code: Option<i64>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,9 +208,19 @@ pub enum Lit {
 
 #[derive(Debug, Clone)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
-    Eq, NotEq, Lt, Gt, LtEq, GtEq,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    NotEq,
+    Lt,
+    Gt,
+    LtEq,
+    GtEq,
+    And,
+    Or,
 }
 
 #[derive(Debug, Clone)]

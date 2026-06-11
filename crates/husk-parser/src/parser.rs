@@ -303,7 +303,7 @@ impl Parser {
             return Ok(Stmt::LetMulti(LetMultiStmt { names, value }));
         }
 
-        // let nome tipo = expr  ou  let nome = expr
+        // let nome tipo = expr  ou  let nome = expr  ou  let nome = expr?
         let ty = if self.current_is_type() {
             Some(self.parse_type()?)
         } else {
@@ -311,6 +311,42 @@ impl Parser {
         };
         self.expect(TokenKind::Eq)?;
         let value = self.parse_expr()?;
+
+        // let nome = expr? [status] ["mensagem"]  — try operator
+        if matches!(self.current_kind(), TokenKind::Question) {
+            if ty.is_some() {
+                return Err(ParseError::new(
+                    "? não pode ser usado com anotação de tipo explícita",
+                    self.current_span(),
+                ));
+            }
+            self.advance(); // consome ?
+
+            // status code opcional
+            let status_code = if let TokenKind::Int(n) = self.current_kind() {
+                let n = *n;
+                self.advance();
+                Some(n)
+            } else {
+                None
+            };
+
+            // mensagem opcional
+            let message = if let TokenKind::Str(s) = self.current_kind().clone() {
+                self.advance();
+                Some(s)
+            } else {
+                None
+            };
+
+            return Ok(Stmt::TryLet(TryLetStmt {
+                name: first,
+                call: value,
+                status_code,
+                message,
+            }));
+        }
+
         Ok(Stmt::Let(LetStmt {
             name: first,
             ty,

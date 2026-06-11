@@ -253,6 +253,25 @@ impl Checker {
                 self.check_expr(e, scope, ctx);
                 vec![]
             }
+            Stmt::TryLet(t) => {
+                // let x = expr?  — verifica que é chamada de função
+                let _ = self.check_expr(&t.call, scope, ctx);
+
+                // Declara a variável com tipo Unknown (vem do retorno da função)
+                scope.declare_or_shadow(&t.name, Symbol::Variable(TypeInfo::Unknown));
+
+                // Verifica que o status code é válido
+                if let Some(code) = t.status_code {
+                    if code < 100 || code > 599 {
+                        self.errors.push(SemanticError::new(
+                            format!("status code HTTP inválido: {}", code),
+                            Span { line: 0, col: 0 },
+                        ));
+                    }
+                }
+
+                vec![]
+            }
         }
     }
 
