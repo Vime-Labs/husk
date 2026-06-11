@@ -121,6 +121,7 @@ impl Codegen {
                 Item::MiddlewareDef(m) => body.push_str(&self.gen_middleware(m)?),
                 Item::RouteDef(_) => {}
                 Item::Import(_) => {}
+                Item::CorsDef(_) => {}
             }
         }
 
@@ -144,6 +145,11 @@ impl Codegen {
         let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
         if has_routes {
             self.go_imports.insert("github.com/go-chi/chi/v5".into());
+        }
+
+        let has_cors = program.items.iter().any(|i| matches!(i, Item::CorsDef(_)));
+        if has_cors {
+            self.go_imports.insert("github.com/go-chi/cors".into());
         }
 
         for item in &program.items {
@@ -410,6 +416,47 @@ impl Codegen {
         Ok(s)
     }
 
+    // --- cors ---
+
+    fn gen_cors(&self, c: &CorsDef) -> String {
+        let default_origins = vec!["*".to_string()];
+        let default_methods = vec![
+            "GET".to_string(),
+            "POST".to_string(),
+            "PUT".to_string(),
+            "PATCH".to_string(),
+            "DELETE".to_string(),
+            "OPTIONS".to_string(),
+        ];
+        let default_headers = vec![
+            "Accept".to_string(),
+            "Authorization".to_string(),
+            "Content-Type".to_string(),
+        ];
+
+        let origins = if c.origins.is_empty() { &default_origins } else { &c.origins };
+        let methods = if c.methods.is_empty() { &default_methods } else { &c.methods };
+        let headers = if c.headers.is_empty() { &default_headers } else { &c.headers };
+
+        let fmt_slice = |v: &Vec<String>| -> String {
+            let items: Vec<String> = v.iter().map(|s| format!("\"{}\"", s)).collect();
+            format!("[]string{{{}}}", items.join(", "))
+        };
+
+        format!(
+            "\tr.Use(cors.Handler(cors.Options{{\n\
+             \t\tAllowedOrigins: {},\n\
+             \t\tAllowedMethods: {},\n\
+             \t\tAllowedHeaders: {},\n\
+             \t\tAllowCredentials: false,\n\
+             \t\tMaxAge: 300,\n\
+             \t}}))\n\n",
+            fmt_slice(origins),
+            fmt_slice(methods),
+            fmt_slice(headers),
+        )
+    }
+
     // --- main + rotas ---
 
     fn gen_main(&self, program: &Program) -> Result<String, CodegenError> {
@@ -438,13 +485,25 @@ impl Codegen {
         s.push_str("\tr := chi.NewRouter()\n\n");
 
         for item in &program.items {
+            if let Item::CorsDef(c) = item {
+                s.push_str(&self.gen_cors(c));
+            }
+        }
+
+        for item in &program.items {
             if let Item::RouteDef(route) = item {
                 s.push_str(&self.gen_route_registration(route)?);
             }
         }
 
-        s.push_str("\n\tfmt.Println(\"husk: servidor rodando em http://localhost:8080\")\n");
-        s.push_str("\tlog.Fatal(http.ListenAndServe(\":8080\", r))\n}\n");
+        s.push_str("\n\tport := os.Getenv(\"PORT\")\n");
+        s.push_str("\tif port == \"\" {\n");
+        s.push_str("\t\tport = \":8080\"\n");
+        s.push_str("\t} else if port[0] != ':' {\n");
+        s.push_str("\t\tport = \":\" + port\n");
+        s.push_str("\t}\n");
+        s.push_str("\tfmt.Println(\"husk: servidor rodando em http://localhost\" + port + \"\")\n");
+        s.push_str("\tlog.Fatal(http.ListenAndServe(port, r))\n}\n");
         Ok(s)
     }
 
@@ -2127,5 +2186,63 @@ fn ola() string {
 "#,
         );
         assert!(!go.contains("// husk:"));
+    }
+
+    #[test]
+    fn test_cors_defaults() {
+        let go = codegen(
+            r#"
+cors {}
+
+route GET /ping {
+    return json({ status: "ok" })
+}
+"#,
+        );
+        assert!(go.contains("\"github.com/go-chi/cors\""));
+        assert!(go.contains("r.Use(cors.Handler(cors.Options{"));
+        assert!(go.contains("AllowedOrigins: []string{\"*\"}"));
+        assert!(go.contains("AllowedMethods: []string{\"GET\", \"POST\", \"PUT\", \"PATCH\", \"DELETE\", \"OPTIONS\"}"));
+        assert!(go.contains("AllowedHeaders: []string{\"Accept\", \"Authorization\", \"Content-Type\"}"));
+        assert!(go.contains("AllowCredentials: false"));
+        assert!(go.contains("MaxAge: 300"));
+    }
+
+    #[test]
+    fn test_cors_custom() {
+        let go = codegen(
+            r#"
+cors {
+  origins: ["https://app.vime.com.br", "http://localhost:3000"]
+  methods: ["GET", "POST"]
+  headers: ["Content-Type", "Authorization"]
+}
+
+route GET /ping {
+    return json({ status: "ok" })
+}
+"#,
+        );
+        assert!(go.contains("AllowedOrigins: []string{\"https://app.vime.com.br\", \"http://localhost:3000\"}"));
+        assert!(go.contains("AllowedMethods: []string{\"GET\", \"POST\"}"));
+        assert!(go.contains("AllowedHeaders: []string{\"Content-Type\", \"Authorization\"}"));
+    }
+
+    #[test]
+    fn test_cors_before_routes() {
+        let go = codegen(
+            r#"
+cors {
+  origins: ["*"]
+}
+
+route GET /ping {
+    return json({ status: "ok" })
+}
+"#,
+        );
+        let cors_pos = go.find("r.Use(cors.Handler").unwrap();
+        let route_pos = go.find("r.Get(").unwrap();
+        assert!(cors_pos < route_pos, "cors.Use deve aparecer antes das rotas");
     }
 }

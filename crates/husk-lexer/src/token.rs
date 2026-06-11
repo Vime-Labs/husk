@@ -20,6 +20,7 @@ pub enum TokenKind {
     Else,
     Route,
     Middleware,
+    Cors,
     Next,
     Import,
     As,

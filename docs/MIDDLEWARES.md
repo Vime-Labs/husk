@@ -62,46 +62,69 @@ r.With(autenticado, admin).Post("/admin", func(...) {
 })
 ```
 
-## Passando dados para a rota — `set_ctx` e `req.ctx`
+## Passando dados para a rota — contexto tipado com `-> ctx`
 
-Um middleware pode escrever valores no contexto da requisição com `set_ctx("chave", valor)`. As rotas (e middlewares seguintes) leem esses valores com `req.ctx["chave"]`.
+### Definição do middleware com contexto
+
+Adicione `-> ctx_var` após o nome do middleware para declarar que ele produz um contexto
+tipado para as rotas:
 
 ```husk
-import "./auth" as auth
-import "husk/env" as env
-
-middleware autenticado {
+middleware autenticado -> ctx {
     let token = req.headers["Authorization"]
     if token == "" {
         return status(401, json({ erro: "token ausente" }))
     }
-    let claims, err = auth.claims_do_token(token)
-    if err != nil {
-        return status(401, json({ erro: "token inválido" }))
-    }
-    set_ctx("role", claims["role"])
-    set_ctx("user_id", claims["sub"])
+    // claims vindos da validação do JWT
+    let claims = jwt.verify(token, secret)
+
+    ctx.role = claims["role"]       // string
+    ctx.user_id = claims["sub"]     // string
     next()
 }
 ```
 
-Na rota, os valores ficam disponíveis via `req.ctx`:
+O nome da variável (`ctx`) é escolhido por você — pode ser `auth`, `session`, etc.
+
+### Rota consumindo o contexto
+
+A rota declara `-> ctx` para receber o contexto tipado:
 
 ```husk
-route GET /api/auth/users [autenticado] {
-    let role = req.ctx["role"]
-    if role != "master" {
-        return status(403, json({ erro: "acesso negado" }))
-    }
-    let rows, err = auth.listar_usuarios()
-    if err != nil {
-        return status(500, json({ erro: err.message }))
-    }
-    return json({ data: rows })
+route GET /api/clientes [autenticado] -> ctx {
+    require_role(ctx.role, "master")
+    return json({ user_id: ctx.user_id })
 }
 ```
 
-Isso elimina a necessidade de re-verificar o token em cada rota protegida.
+Isso substitui o padrão antigo:
+
+| Antes (string-based)        | Agora (type-safe)             |
+|-----------------------------|-------------------------------|
+| `set_ctx("role", valor)`   | `ctx.role = valor`            |
+| `req.ctx["role"]`          | `ctx.role`                    |
+| `r.Context().Value("role").(string)` | (gerado automaticamente) |
+
+> As chaves são namespaced automaticamente (`__husk_ctx_role`), eliminando colisões
+> entre middlewares diferentes.
+
+### Múltiplos middlewares na cadeia
+
+Um middleware posterior pode ler campos setados por um anterior:
+
+```husk
+middleware admin -> ctx {
+    if ctx.role != "admin" {
+        return status(403, json({ erro: "só admin" }))
+    }
+    next()
+}
+
+route POST /admin [autenticado, admin] -> ctx {
+    // ctx.role e ctx.user_id disponíveis
+    return json({ ok: true })
+}
+```
 
 ## Acesso ao `req`
 
@@ -109,10 +132,15 @@ Dentro de um middleware, `req` está disponível da mesma forma que em rotas:
 
 ```husk
 middleware logger {
-    // req.headers, req.query, req.params, req.ctx disponíveis
+    // req.headers, req.query, req.params disponíveis
     next()
 }
 ```
+
+## Compatibilidade: `set_ctx` e `req.ctx` (estilo antigo)
+
+O estilo antigo com `set_ctx("chave", valor)` e `req.ctx["chave"]` ainda funciona,
+mas o novo padrão `-> ctx` é recomendado por ser type-safe.
 
 ## Regras
 
@@ -120,4 +148,5 @@ middleware logger {
 - O nome do middleware deve ser único no arquivo.
 - `next()` sem argumentos passa o controle adiante.
 - Chamar `return` antes de `next()` interrompe a requisição.
-- `set_ctx` só faz sentido antes de `next()` — valores escritos depois não chegam ao handler.
+- Atribuições a `ctx.field` antes de `next()` são propagadas para a rota.
+- O contexto (`-> ctx`) só está disponível se a rota também declarar `-> ctx`.

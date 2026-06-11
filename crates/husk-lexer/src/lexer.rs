@@ -272,6 +272,7 @@ impl Lexer {
             "else" => TokenKind::Else,
             "route" => TokenKind::Route,
             "middleware" => TokenKind::Middleware,
+            "cors" => TokenKind::Cors,
             "next" => TokenKind::Next,
             "import" => TokenKind::Import,
             "as" => TokenKind::As,

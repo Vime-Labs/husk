@@ -12,6 +12,16 @@ pub enum Item {
     StructDef(StructDef),
     Import(ImportDef),
     MiddlewareDef(MiddlewareDef),
+    CorsDef(CorsDef),
+}
+
+/// cors { origins: [...] methods: [...] headers: [...] }
+#[derive(Debug, Clone)]
+pub struct CorsDef {
+    pub origins: Vec<String>,
+    pub methods: Vec<String>,
+    pub headers: Vec<String>,
+    pub span: Span,
 }
 
 /// fn nome(params) tipo_retorno { corpo }

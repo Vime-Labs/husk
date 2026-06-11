@@ -65,16 +65,20 @@ Chamadas com alias da stdlib **mantêm o prefixo**: `env.get("PORT")` → `env_g
 
 ### husk/env
 
-Leitura de variáveis de ambiente.
+Leitura de variáveis de ambiente e loading de arquivos `.env`.
 
 | Função                       | Descrição                                           |
 |------------------------------|-----------------------------------------------------|
 | `env.get(key)`               | Retorna o valor da variável ou `""` se não definida |
 | `env.get_or(key, fallback)`  | Retorna o valor ou `fallback` se não definida       |
 | `env.require(key)`           | Retorna o valor; pânico se a variável não existir   |
+| `env.load(paths...)`         | Carrega `.env` de um ou mais arquivos               |
 
 ```husk
 import "husk/env" as env
+
+// Loading explícito (o main() já carrega .env automaticamente)
+env.load(".env", "config/.env")
 
 route GET /config {
     let porta = env.get_or("PORT", "8080")
@@ -82,15 +86,30 @@ route GET /config {
 }
 ```
 
+> O `main()` gerado já carrega `.env` e `backend/.env` automaticamente na inicialização.
+> Use `env.load()` quando precisar de arquivos adicionais ou controle explícito.
+
 ### husk/postgres
 
 Conexão e queries para PostgreSQL via pgx.
 
-A conexão é estabelecida automaticamente a partir da variável `DATABASE_URL`. Não é necessário chamar `db.connect()` manualmente na maioria dos casos.
+A conexão **não é automática** — chame `db.connect()` explicitamente com a URL
+que preferir (geralmente vinda de `env.require()`):
+
+```husk
+import "husk/postgres" as db
+import "husk/env" as env
+
+let url = env.require("DATABASE_URL")
+let err = db.connect(url)
+if err != nil {
+    return status(500, json({ erro: "falha ao conectar: " + err.message }))
+}
+```
 
 | Função                       | Retorno           | Descrição                         |
 |------------------------------|-------------------|-----------------------------------|
-| `db.connect(url)`            | `error`           | Conecta explicitamente            |
+| `db.connect(url)`            | `error`           | Conecta ao banco                  |
 | `db.query(sql, args...)`     | `([]map, error)`  | Retorna todas as linhas           |
 | `db.query_one(sql, args...)` | `(map, error)`    | Retorna a primeira linha          |
 | `db.exec(sql, args...)`      | `(interface{}, error)` | Executa sem retornar linhas. Use com `?`: `let _ = db.exec(sql, args...)?` |

@@ -41,9 +41,10 @@ impl Parser {
             TokenKind::Struct => Ok(Item::StructDef(self.parse_struct()?)),
             TokenKind::Import => Ok(Item::Import(self.parse_import()?)),
             TokenKind::Middleware => Ok(Item::MiddlewareDef(self.parse_middleware()?)),
+            TokenKind::Cors => Ok(Item::CorsDef(self.parse_cors()?)),
             _ => Err(ParseError::new(
                 format!(
-                    "esperado item top-level (fn/route/struct/import/middleware), encontrado {:?}",
+                    "esperado item top-level (fn/route/struct/import/middleware/cors), encontrado {:?}",
                     self.current_kind()
                 ),
                 self.current_span(),
@@ -170,6 +171,72 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    // cors { origins: [...] methods: [...] headers: [...] }
+    fn parse_cors(&mut self) -> Result<CorsDef, ParseError> {
+        let span = self.current_span();
+        self.expect(TokenKind::Cors)?;
+        self.expect(TokenKind::LBrace)?;
+
+        let mut origins: Vec<String> = Vec::new();
+        let mut methods: Vec<String> = Vec::new();
+        let mut headers: Vec<String> = Vec::new();
+
+        while !matches!(self.current_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let field = self.expect_ident()?;
+            self.expect(TokenKind::Colon)?;
+            let values = self.parse_string_array()?;
+            match field.as_str() {
+                "origins" => origins = values,
+                "methods" => methods = values,
+                "headers" => headers = values,
+                other => {
+                    return Err(ParseError::new(
+                        format!(
+                            "campo cors desconhecido: '{}' (esperado: origins, methods, headers)",
+                            other
+                        ),
+                        self.current_span(),
+                    ))
+                }
+            }
+        }
+
+        self.expect(TokenKind::RBrace)?;
+        Ok(CorsDef {
+            origins,
+            methods,
+            headers,
+            span,
+        })
+    }
+
+    fn parse_string_array(&mut self) -> Result<Vec<String>, ParseError> {
+        self.expect(TokenKind::LBracket)?;
+        let mut values = Vec::new();
+        while !matches!(self.current_kind(), TokenKind::RBracket | TokenKind::Eof) {
+            match self.current_kind().clone() {
+                TokenKind::Str(s) => {
+                    self.advance();
+                    values.push(s);
+                }
+                _ => {
+                    return Err(ParseError::new(
+                        format!(
+                            "esperado string no array cors, encontrado {:?}",
+                            self.current_kind()
+                        ),
+                        self.current_span(),
+                    ))
+                }
+            }
+            if matches!(self.current_kind(), TokenKind::Comma) {
+                self.advance();
+            }
+        }
+        self.expect(TokenKind::RBracket)?;
+        Ok(values)
     }
 
     // route GET /caminho [mw1, mw2] [-> ctx_var] { ... }
@@ -590,6 +657,14 @@ impl Parser {
             TokenKind::Ident(name) => {
                 self.advance();
                 Ok(Expr::Ident(name))
+            }
+            TokenKind::TyFloat => {
+                self.advance();
+                Ok(Expr::Ident("float".into()))
+            }
+            TokenKind::TyString => {
+                self.advance();
+                Ok(Expr::Ident("string".into()))
             }
             TokenKind::LParen => {
                 self.advance();

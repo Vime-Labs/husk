@@ -39,6 +39,24 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // float(s string) (float, error)
+        let _ = global.declare(
+            "float",
+            Symbol::Function(FnSignature {
+                params: vec![("s".into(), TypeInfo::String)],
+                return_types: vec![TypeInfo::Float, TypeInfo::Error],
+            }),
+            &Span { line: 0, col: 0 },
+        );
+        // string(val) string
+        let _ = global.declare(
+            "string",
+            Symbol::Function(FnSignature {
+                params: vec![],
+                return_types: vec![TypeInfo::String],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         // require_role(actual, expected, [msg]) — compara valor com role esperada
         let _ = global.declare(
             "require_role",
@@ -192,6 +210,7 @@ impl Checker {
                     let _ = self.global.declare(&imp.alias, Symbol::Module, &imp.span);
                 }
                 Item::RouteDef(_) => {} // rotas são verificadas na segunda passada
+                Item::CorsDef(_) => {}
             }
         }
     }

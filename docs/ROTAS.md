@@ -10,6 +10,14 @@ route MÉTODO /caminho {
 }
 ```
 
+Rotas também podem receber middlewares e contexto tipado:
+
+```husk
+route MÉTODO /caminho [middleware1, middleware2] -> ctx {
+    // corpo com ctx.field tipado
+}
+```
+
 ## Métodos suportados
 
 `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
@@ -35,6 +43,24 @@ route GET /users/:id {
 ```
 
 O parâmetro `:id` é mapeado para `{id}` no chi e pode ser lido via `req.params.id` ou usado diretamente como variável.
+
+### Parâmetro tipado
+
+Declare o tipo após `:` entre `< >` para receber o valor já convertido:
+
+```husk
+route GET /api/clientes/:id<int> {
+    // req.params.id já é int — sem parse_int()
+    return json({ id: req.params.id })
+}
+
+route GET /medidas/:valor<float> {
+    // req.params.valor já é float64
+    return json({ medido: req.params.valor })
+}
+```
+
+Sem a anotação de tipo, o parâmetro é `string` (comportamento padrão).
 
 ### Retorno em JSON
 
@@ -166,31 +192,47 @@ Ver [MIDDLEWARES.md](MIDDLEWARES.md) para como definir middlewares.
 
 ### Verificação de role com `require_role`
 
-Para rotas que exigem uma role específica, use `require_role()` no corpo da rota:
+Para rotas que exigem uma role específica, use `require_role()` no corpo da rota.
+O primeiro argumento é o valor real (geralmente vindo do contexto), o segundo é o valor esperado:
 
 ```husk
-route GET /admin [autenticado] {
-    require_role("master")
-    // só chega aqui se for master
+route GET /admin [autenticado] -> ctx {
+    require_role(ctx.role, "master")
+    // só chega aqui se ctx.role == "master"
     return "painel admin"
 }
 ```
 
-É equivalente a:
-
-```husk
-if req.ctx["role"] != "master" {
-    return status(403, { erro: "Acesso restrito" })
+Gera:
+```go
+if ctx_role != "master" {
+    w.WriteHeader(403)
+    json.NewEncoder(w).Encode(map[string]interface{}{"erro": "Acesso restrito"})
+    return
 }
 ```
 
-Mensagem customizada:
+Mensagem customizada (3º argumento):
 
 ```husk
-require_role("admin", "Só administradores")
+require_role(ctx.role, "admin", "Só administradores")
 ```
 
-> `require_role` só funciona dentro de rotas e middlewares (contexto com `req`).
+### Contexto tipado via `-> ctx`
+
+Quando uma rota recebe `-> ctx`, ela ganha acesso a um objeto `ctx` com campos tipados
+setados pelos middlewares da cadeia. Isso substitui o padrão antigo
+`set_ctx("chave", valor)` / `req.ctx["chave"]` por algo type-safe:
+
+```husk
+route GET /api/clientes [autenticado] -> ctx {
+    require_role(ctx.role, "master")
+    return json({ user_id: ctx.user_id })
+}
+```
+
+> O `ctx` só existe se houver um middleware na cadeia que o produza
+> (via `-> ctx` na definição do middleware).
 
 ### `require_field` — validação de campos obrigatórios
 
