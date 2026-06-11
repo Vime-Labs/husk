@@ -347,6 +347,15 @@ fn prepare_go_dir(husk_file: &str, go_code: &str, stdlib: &StdlibDeps) -> PathBu
 
     stdlib.write_shims(&dir);
 
+    // Copia .env se existir no diretório de origem
+    let source_dir = Path::new(husk_file).parent().unwrap_or(Path::new("."));
+    let env_src = source_dir.join(".env");
+    if env_src.exists() {
+        let content =
+            fs::read_to_string(&env_src).unwrap_or_else(|e| die(&format!("erro ao ler .env: {e}")));
+        write_file(&dir.join(".env"), &content);
+    }
+
     dir
 }
 

@@ -147,6 +147,13 @@ impl Codegen {
                 _ => {}
             }
         }
+
+        // .env loading usa os e strings
+        let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
+        if has_routes {
+            self.go_imports.insert("os".into());
+            self.go_imports.insert("strings".into());
+        }
     }
 
     fn scan_block_imports(&mut self, block: &Block, ctx: Ctx) {
@@ -369,7 +376,29 @@ impl Codegen {
     // --- main + rotas ---
 
     fn gen_main(&self, program: &Program) -> Result<String, CodegenError> {
-        let mut s = String::from("func main() {\n\tr := chi.NewRouter()\n\n");
+        let mut s = String::from("func main() {\n");
+
+        // --- Auto-load .env ---
+        s.push_str("\t// Carrega .env automaticamente (procura em .env e backend/.env)\n");
+        s.push_str("\tfor _, envPath := range []string{\".env\", \"backend/.env\"} {\n");
+        s.push_str("\t\tif data, err := os.ReadFile(envPath); err == nil {\n");
+        s.push_str("\t\t\tfor _, line := range strings.Split(string(data), \"\\n\") {\n");
+        s.push_str("\t\t\t\tline = strings.TrimSpace(line)\n");
+        s.push_str("\t\t\t\tif line == \"\" || strings.HasPrefix(line, \"#\") {\n");
+        s.push_str("\t\t\t\t\tcontinue\n");
+        s.push_str("\t\t\t\t}\n");
+        s.push_str("\t\t\t\tif parts := strings.SplitN(line, \"=\", 2); len(parts) == 2 {\n");
+        s.push_str("\t\t\t\t\tkey := strings.TrimSpace(parts[0])\n");
+        s.push_str("\t\t\t\t\tval := strings.TrimSpace(parts[1])\n");
+        s.push_str("\t\t\t\t\tif os.Getenv(key) == \"\" {\n");
+        s.push_str("\t\t\t\t\t\tos.Setenv(key, val)\n");
+        s.push_str("\t\t\t\t\t}\n");
+        s.push_str("\t\t\t\t}\n");
+        s.push_str("\t\t\t}\n");
+        s.push_str("\t\t}\n");
+        s.push_str("\t}\n\n");
+
+        s.push_str("\tr := chi.NewRouter()\n\n");
 
         for item in &program.items {
             if let Item::RouteDef(route) = item {
