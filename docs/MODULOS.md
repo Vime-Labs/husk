@@ -128,6 +128,44 @@ route POST /usuarios {
 }
 ```
 
+### husk/jwt
+
+Geração e verificação de JSON Web Tokens com HMAC-SHA256.
+
+| Função                       | Retorno           | Descrição                                                        |
+|------------------------------|-------------------|------------------------------------------------------------------|
+| `jwt.sign(payload, secret)`  | `(string, error)` | Cria um JWT assinado. Adiciona `exp` de 24h se não informado     |
+| `jwt.verify(token, secret)`  | `(map, error)`    | Verifica a assinatura e retorna os claims como mapa              |
+
+```husk
+import "husk/jwt"  as jwt
+import "husk/env"  as env
+
+fn token_novo(user_id int) (string, error) {
+    let secret = env.require("JWT_SECRET")
+    return jwt.sign({ user_id: user_id }, secret)
+}
+
+route POST /login {
+    let secret = env.require("JWT_SECRET")
+    let token, err = jwt.sign({ user_id: 42, role: "admin" }, secret)
+    if err != nil {
+        return status(500, json({ erro: err.message }))
+    }
+    return json({ token: token })
+}
+
+route GET /perfil {
+    let secret = env.require("JWT_SECRET")
+    let raw = req.headers["Authorization"]
+    let claims, err = jwt.verify(raw, secret)
+    if err != nil {
+        return status(401, json({ erro: "token inválido" }))
+    }
+    return json(claims)
+}
+```
+
 ---
 
 ## Importações circulares

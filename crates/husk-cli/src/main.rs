@@ -14,6 +14,7 @@ use std::{
 const STDLIB_ENV: &str = include_str!("stdlib/env.go");
 const STDLIB_POSTGRES: &str = include_str!("stdlib/postgres.go");
 const STDLIB_CRYPTO: &str = include_str!("stdlib/crypto.go");
+const STDLIB_JWT: &str = include_str!("stdlib/jwt.go");
 
 struct StdlibDeps {
     modules: Vec<String>,
@@ -41,6 +42,9 @@ impl StdlibDeps {
         if self.has("husk/crypto") {
             reqs.push("golang.org/x/crypto v0.38.0".to_string());
         }
+        if self.has("husk/jwt") {
+            reqs.push("github.com/golang-jwt/jwt/v5 v5.2.2".to_string());
+        }
         reqs.iter().map(|r| format!("\t{r}\n")).collect::<String>()
     }
 
@@ -53,6 +57,9 @@ impl StdlibDeps {
         }
         if self.has("husk/crypto") {
             write_file(&dir.join("husk_stdlib_crypto.go"), STDLIB_CRYPTO);
+        }
+        if self.has("husk/jwt") {
+            write_file(&dir.join("husk_stdlib_jwt.go"), STDLIB_JWT);
         }
     }
 }
