@@ -21,9 +21,11 @@ const STDLIB_ENV: &str = include_str!("stdlib/env.go");
 const STDLIB_POSTGRES: &str = include_str!("stdlib/postgres.go");
 const STDLIB_CRYPTO: &str = include_str!("stdlib/crypto.go");
 const STDLIB_JWT: &str = include_str!("stdlib/jwt.go");
+const MIGRATE_GO: &str = include_str!("stdlib/migrate.go");
 
 struct StdlibDeps {
     modules: Vec<String>,
+    has_cors: bool,
 }
 
 impl StdlibDeps {
@@ -43,7 +45,8 @@ impl StdlibDeps {
                 }
             })
             .collect();
-        StdlibDeps { modules }
+        let has_cors = program.items.iter().any(|i| matches!(i, Item::CorsDef(_)));
+        StdlibDeps { modules, has_cors }
     }
 
     fn has(&self, name: &str) -> bool {
@@ -52,6 +55,9 @@ impl StdlibDeps {
 
     fn go_mod_requires(&self) -> String {
         let mut reqs = vec!["github.com/go-chi/chi/v5 v5.2.1".to_string()];
+        if self.has_cors {
+            reqs.push("github.com/go-chi/cors v1.5.0".to_string());
+        }
         if self.has("husk/postgres") {
             reqs.push("github.com/jackc/pgx/v5 v5.7.4".to_string());
         }
@@ -101,19 +107,24 @@ fn main() {
         Some("fmt") => cmd_fmt(&args),
         Some("add") => cmd_add(&args),
         Some("new") => cmd_new(&args),
+        Some("migrate") => cmd_migrate(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
             eprintln!();
             eprintln!("{BOLD}uso:{RESET}");
-            eprintln!("  husk lsp                      inicia servidor LSP");
-            eprintln!("  husk run    <arquivo.husk>   transpila e executa");
-            eprintln!("  husk dev    <arquivo.husk>   hot reload (transpila e reinicia ao salvar)");
-            eprintln!("  husk build  <arquivo.husk>   gera binário Go");
-            eprintln!("  husk test   [arquivo]         executa testes");
-            eprintln!("  husk check  <arquivo.husk>   verifica sintaxe");
-            eprintln!("  husk fmt    <arquivo.husk>   formata código");
-            eprintln!("  husk add    <modulo>           adiciona módulo stdlib");
-            eprintln!("  husk new    <nome>            cria novo projeto");
+            eprintln!("  husk lsp                           inicia servidor LSP");
+            eprintln!("  husk run    <arquivo.husk>        transpila e executa");
+            eprintln!("  husk dev    <arquivo.husk>        hot reload (transpila e reinicia ao salvar)");
+            eprintln!("  husk build  <arquivo.husk>        gera binário Go");
+            eprintln!("  husk test   [arquivo]              executa testes");
+            eprintln!("  husk check  <arquivo.husk>        verifica sintaxe");
+            eprintln!("  husk fmt    <arquivo.husk>        formata código");
+            eprintln!("  husk add    <modulo>               adiciona módulo stdlib");
+            eprintln!("  husk new    <nome>                 cria novo projeto");
+            eprintln!("  husk migrate create <nome>        cria migration SQL");
+            eprintln!("  husk migrate up                   aplica migrations pendentes");
+            eprintln!("  husk migrate down                 reverte a última migration");
+            eprintln!("  husk migrate status               lista estado das migrations");
             process::exit(1);
         }
     }
@@ -313,7 +324,7 @@ fn cmd_test(args: &[String]) {
     // transpila cada arquivo e coleta funções test_*
     let mut test_fns: Vec<(String, String)> = Vec::new(); // (nome, go_code da fn)
     let mut all_go_code = String::new();
-    let mut stdlib = StdlibDeps { modules: Vec::new() };
+    let mut stdlib = StdlibDeps { modules: Vec::new(), has_cors: false };
 
     for (file, source) in &test_files {
         step("  ", file);
@@ -530,6 +541,144 @@ fn start_dev_server(file: &str) -> Option<process::Child> {
             None
         }
     }
+}
+
+fn cmd_migrate(args: &[String]) {
+    let subcmd = args.get(2).map(|s| s.as_str()).unwrap_or_else(|| {
+        eprintln!("{RED}erro:{RESET} uso: husk migrate <create|up|down|status> [nome]");
+        process::exit(1);
+    });
+
+    match subcmd {
+        "create" => migrate_create(args),
+        "up" | "down" | "status" => migrate_run(subcmd),
+        _ => {
+            eprintln!("{RED}erro:{RESET} subcomando desconhecido '{subcmd}'");
+            eprintln!("  disponíveis: create, up, down, status");
+            process::exit(1);
+        }
+    }
+}
+
+fn migrate_create(args: &[String]) {
+    let name = args.get(3).map(|s| s.as_str()).unwrap_or_else(|| {
+        eprintln!("{RED}erro:{RESET} uso: husk migrate create <nome>");
+        process::exit(1);
+    });
+
+    let cwd = env::current_dir().unwrap();
+    let migrations_dir = cwd.join("migrations");
+    fs::create_dir_all(&migrations_dir).expect("falha ao criar diretório migrations/");
+
+    let ts = unix_to_timestamp(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    );
+    let filename = format!("{}_{}.sql", ts, name);
+    let content = "-- +goose Up\n\n\n-- +goose Down\n\n";
+    fs::write(migrations_dir.join(&filename), content).expect("falha ao criar migration");
+
+    ok(&format!("migrations/{filename}"));
+}
+
+fn migrate_run(subcmd: &str) {
+    let cwd = env::current_dir().unwrap();
+    let migrations_dir = cwd.join("migrations");
+
+    if !migrations_dir.exists() {
+        eprintln!("{RED}erro:{RESET} diretório 'migrations/' não encontrado");
+        eprintln!("  crie uma migration: husk migrate create <nome>");
+        process::exit(1);
+    }
+
+    let dir = env::temp_dir().join("husk_migrate");
+    fs::create_dir_all(&dir).expect("falha ao criar diretório temporário");
+
+    write_file(&dir.join("main.go"), MIGRATE_GO);
+
+    // só inicializa go.mod+deps se ainda não tiver goose (cache entre execuções)
+    let go_mod_path = dir.join("go.mod");
+    let needs_init = !go_mod_path.exists()
+        || !fs::read_to_string(&go_mod_path)
+            .unwrap_or_default()
+            .contains("pressly/goose");
+
+    if needs_init {
+        write_file(&go_mod_path, "module husk_migrate\n\ngo 1.21\n");
+
+        step("dependências", "inicializando (apenas na primeira vez)...");
+
+        for dep in &[
+            "github.com/pressly/goose/v3@latest",
+            "github.com/jackc/pgx/v5@v5.7.4",
+        ] {
+            let out = Command::new("go")
+                .args(["get", dep])
+                .current_dir(&dir)
+                .output()
+                .unwrap_or_else(|_| die("'go' não encontrado. Instale em https://go.dev/dl/"));
+            if !out.status.success() {
+                eprintln!("{RED}erro:{RESET} {}", String::from_utf8_lossy(&out.stderr));
+                process::exit(1);
+            }
+        }
+
+        let tidy = Command::new("go")
+            .args(["mod", "tidy"])
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|_| die("'go' não encontrado"));
+        if !tidy.status.success() {
+            eprintln!("{RED}erro:{RESET} {}", String::from_utf8_lossy(&tidy.stderr));
+            process::exit(1);
+        }
+    }
+
+    // copia .env do projeto para o dir temporário
+    let env_src = cwd.join(".env");
+    if env_src.exists() {
+        let content = fs::read_to_string(&env_src).unwrap_or_default();
+        write_file(&dir.join(".env"), &content);
+    }
+
+    step("migrações", &format!("{subcmd}..."));
+
+    let status = Command::new("go")
+        .args(["run", ".", subcmd])
+        .current_dir(&dir)
+        .env("HUSK_MIGRATIONS_DIR", migrations_dir.to_str().unwrap())
+        .status()
+        .unwrap_or_else(|_| die("'go' não encontrado"));
+
+    if status.success() && subcmd != "status" {
+        ok(&format!("migrate {subcmd} concluído"));
+    } else if !status.success() {
+        process::exit(status.code().unwrap_or(1));
+    }
+}
+
+/// Converte Unix timestamp (segundos) em string YYYYMMDDHHMMSS.
+/// Usa o algoritmo de Howard Hinnant para conversão de dias → data civil.
+fn unix_to_timestamp(secs: u64) -> String {
+    let sec = (secs % 60) as u32;
+    let min = ((secs / 60) % 60) as u32;
+    let hour = ((secs / 3600) % 24) as u32;
+    let days = (secs / 86400) as i64;
+
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let yr = if mo <= 2 { y + 1 } else { y };
+
+    format!("{:04}{:02}{:02}{:02}{:02}{:02}", yr, mo, d, hour, min, sec)
 }
 
 fn cmd_new(args: &[String]) {

@@ -33,11 +33,11 @@ fn listar_usuarios() ([]map, error) {
 }
 ```
 
-Combinações possíveis: `[]map`, `[]string`, `[]int`, `[]NomeDaStruct`.
+Combinações: `[]map`, `[]string`, `[]int`, `[]NomeDaStruct`.
 
 ### Struct
 
-Structs agrupam campos nomeados (disponível a partir do v0.3):
+Structs agrupam campos nomeados:
 
 ```husk
 struct Usuario {
@@ -49,10 +49,10 @@ struct Usuario {
 
 ### Objeto literal (inline)
 
-Disponível como argumento para `json()` em rotas:
+Disponível como argumento para `json()` ou `return`:
 
 ```husk
-return json({ status: "ok", codigo: 200 })
+return { status: "ok", codigo: 200 }
 ```
 
 Gera `map[string]interface{}` no Go.
@@ -83,15 +83,6 @@ fn buscar(id int) (string, error) {
 }
 ```
 
-Dentro de um `if`, acesse a mensagem de erro com `.message`:
-
-```husk
-let val, err = buscar(id)
-if err != nil {
-    return status(500, json({ erro: err.message }))
-}
-```
-
 ## `nil`
 
 Representa ausência de erro. Válido apenas como segundo valor em retornos `(Type, error)`:
@@ -102,21 +93,22 @@ return "resultado", nil
 
 ## Conversão de tipos
 
-Não há conversão implícita entre tipos. Use `parse_int()` para converter string para inteiro:
+Não há conversão implícita entre tipos. Use funções built-in para conversão explícita:
+
+| Função           | Retorno             | Go gerado                       |
+|------------------|---------------------|---------------------------------|
+| `parse_int(s)`   | `(int, error)`      | `strconv.Atoi(s)`               |
+| `float(s)`       | `(float, error)`    | `strconv.ParseFloat(s, 64)`     |
+| `string(val)`    | `string`            | `fmt.Sprintf("%v", val)`        |
 
 ```husk
-fn buscar(id int) (map, error)
-
-route GET /users/:id {
-    let id = parse_int(req.params.id)? 400 "ID inválido"
-    let user = buscar(id)? 404 "Usuário não encontrado"
-    return json(user)
-}
+let n = parse_int("42")?         // int
+let f = float("3.14")?           // float
+let s = string(42)               // string → "42"
+let msg = "valor: " + string(n)  // concatenação com string()
 ```
 
-`parse_int(s)` gera `strconv.Atoi(s)` no Go, retornando `(int, error)`. Por isso deve ser usado com `?`.
-
-> Conversão explícita para outros tipos (`float`, `string`) virá em versões futuras.
+`parse_int()` e `float()` retornam `(T, error)` — use com `?` para propagar erros.
 
 ## Inferência de retorno em funções
 

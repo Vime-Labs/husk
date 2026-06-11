@@ -12,7 +12,9 @@ fn buscar(id int) (string, error) {
 }
 ```
 
-Quando há erro, retorne `nil` no lugar do valor:
+## Criando erros customizados com `erro()`
+
+Use `erro(mensagem)` para criar um valor de erro:
 
 ```husk
 fn dividir(a int, b int) (int, error) {
@@ -23,7 +25,7 @@ fn dividir(a int, b int) (int, error) {
 }
 ```
 
-> **Nota:** a função `erro()` para criar erros customizados está planejada para v1.0. Por ora, errors são propagados de chamadas Go internas.
+Gera `fmt.Errorf("divisão por zero")` no Go.
 
 ## Capturando erros
 
@@ -99,23 +101,7 @@ O `?` funciona dentro de argumentos de função, permitindo encadear chamadas:
 let cliente = clientes.buscar(parse_int(req.params.id)?)? 404 "Cliente não encontrado"
 ```
 
-Cada `?` gera seu próprio bloco de tratamento de erro. O código gerado executa as operações na ordem correta:
-
-```go
-__try1_val, __try1_err := strconv.Atoi(chi.URLParam(r, "id"))
-if __try1_err != nil {
-    w.WriteHeader(500)
-    ...
-    return
-}
-__try2_val, __try2_err := buscar(__try1_val)
-if __try2_err != nil {
-    w.WriteHeader(404)
-    ...
-    return
-}
-cliente := __try2_val
-```
+Cada `?` gera seu próprio bloco de tratamento de erro.
 
 ### Status code customizado
 

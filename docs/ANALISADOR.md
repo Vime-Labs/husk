@@ -1,6 +1,6 @@
 # Análise Semântica
 
-O analisador semântico é a terceira fase do pipeline do Husk (após lexer e parser, antes do codegen). Ele verifica tipos, escopos e regras da linguagem, garantindo que o programa seja válido antes de gerar código Go.
+O analisador semântico é a terceira fase do pipeline do Husk (após lexer e parser, antes do codegen). Ele verifica tipos, escopos e regras da linguagem.
 
 ## O que é verificado
 
@@ -28,12 +28,12 @@ O analisador semântico é a terceira fase do pipeline do Husk (após lexer e pa
 ### Estruturas de controle
 
 - **`if`** — condição deve ser do tipo `bool`
+- **`for...in`** — coleção deve ser `[]T` ou `map`
 
 ### Contexto
 
 - **`next()`** — só pode ser usado dentro de um bloco `middleware`
 - **`req.*`** — só pode ser usado dentro de uma `route`
-
   - `req.params.campo` → `string`
   - `req.headers["chave"]` → `string`
   - `req.query["chave"]` → `string`
@@ -54,38 +54,31 @@ O analisador semântico é a terceira fase do pipeline do Husk (após lexer e pa
 - **`err.message`** — só pode ser acessado em valores do tipo `error` (ou `Unknown`)
 - **Multi-retorno** — `let a, b = fn()` deve ter exatamente 2 variáveis
 
-### Built-ins
+### For...in
 
-- **`set_ctx(chave, valor)`** — disponível em middlewares e rotas para armazenar dados no contexto da requisição
-- **`parse_int(s)`** — converte string para inteiro, retorna `(int, error)`. Use com `?`: `parse_int(req.params.id)?`
-- **`require_role(role, mensagem?)`** — verifica se `req.ctx["role"]` é igual ao valor esperado. Se não, retorna `403` com JSON. Mensagem opcional (padrão: "Acesso restrito")
-- **`require_field(campo, mensagem?)`** — valida que o campo do body não está vazio. Se vazio, retorna `400` com JSON. Mensagem opcional (padrão: "Campo obrigatório: <campo>")
+- **Coleção** — o iterável deve ser `[]T` ou `map`
 
-### String built-ins
+## Built-ins registrados
 
-Disponíveis sem import — o codegen adiciona `"strings"` automaticamente:
+| Função                  | Assinatura                |
+|-------------------------|---------------------------|
+| `json(val)`             | `(any)`                   |
+| `text(s)`               | `(any)`                   |
+| `status(code, body?)`   | `(int, any?)`             |
+| `set_ctx(key, val)`     | `(string, any)`           |
+| `parse_int(s)`          | `(string) → (int, error)` |
+| `float(s)`              | `(string) → (float, error)` |
+| `string(val)`           | `(any) → string`          |
+| `erro(msg)`             | `(string) → error`        |
+| `assert_eq(expected, actual)` | `(any, any)`        |
+| `require_role(actual, expected, msg?)` | `(string, string, string?)` |
+| `require_field(field, msg?)` | `(string, string?)`    |
+| `len(s)` / `contains(...)` / etc. | string built-ins  |
+| `abs(n)` / `sqrt(n)` / etc. | math built-ins        |
 
-| Função | Retorno | Go gerado |
-|--------|---------|-----------|
-| `len(s)` | `int` | `len(s)` |
-| `contains(s, sub)` | `bool` | `strings.Contains(s, sub)` |
-| `starts_with(s, prefix)` | `bool` | `strings.HasPrefix(s, prefix)` |
-| `replace(s, old, new)` | `string` | `strings.Replace(s, old, new, -1)` |
-| `split(s, sep)` | `[]string` | `strings.Split(s, sep)` |
-| `trim(s)` | `string` | `strings.TrimSpace(s)` |
-| `upper(s)` | `string` | `strings.ToUpper(s)` |
-| `lower(s)` | `string` | `strings.ToLower(s)` |
+## Source maps
 
-### Math built-ins
-
-Disponíveis sem import — o codegen adiciona `"math"` automaticamente:
-
-| Função | Retorno | Go gerado |
-|--------|---------|-----------|
-| `abs(n)` | `float` | `math.Abs(n)` |
-| `sqrt(n)` | `float` | `math.Sqrt(n)` |
-| `min(a, b)` | `int` | `min(a, b)` |
-| `max(a, b)` | `int` | `max(a, b)` |
+O analisador não gera source maps diretamente, mas o codegen insere anotações `// husk:arquivo:linha` antes de cada `FnDef`, `RouteDef` e `MiddlewareDef`. A CLI (`husk run`, `husk build`) usa essas anotações para traduzir erros do compilador Go de volta para as linhas do código `.husk` original.
 
 ## Integração com CLI
 
@@ -107,4 +100,3 @@ arquivo.husk:linha:col erro semântico: mensagem
 
 - Tipos de retorno de funções via módulo (`alias.metodo()`) não são verificados — assume-se `Unknown`
 - Não há verificação de fluxo (ex: nem todos os caminhos retornam um valor)
-- Source maps (mapeamento de erros Go para linhas Husk) não estão implementados

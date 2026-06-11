@@ -2,15 +2,16 @@
 
 Referência da linguagem Husk. Cada arquivo cobre uma parte da linguagem.
 
-| Documento                          | Conteúdo                                                  | Status  |
-|------------------------------------|-----------------------------------------------------------|---------|
-| [FUNCOES.md](FUNCOES.md)           | Definição, parâmetros, retorno, multi-retorno             | ✓ v0.1  |
-| [ROTAS.md](ROTAS.md)               | HTTP, parâmetros tipados, `-> ctx`, req, middlewares      | ✓ v0.6  |
-| [TIPOS.md](TIPOS.md)               | Primitivos, structs, error, nil, inferência               | ✓ v0.3  |
-| [EXPRESSOES.md](EXPRESSOES.md)     | Operadores, if/else, chamadas, literais                   | ✓ v0.4  |
-| [MODULOS.md](MODULOS.md)           | import, alias, módulos do projeto e stdlib                | ✓ v0.6  |
-| [MIDDLEWARES.md](MIDDLEWARES.md)   | Definição, `-> ctx`, contexto tipado, next()              | ✓ v0.6  |
-| [ERROS.md](ERROS.md)               | (valor, error), let multi, err.message, nil, operador ?  | ✓ v0.5  |
-| [STRUCTS.md](STRUCTS.md)           | Instanciação, acesso a campos, JSON                       | ✓ v0.3  |
-| [CLI.md](CLI.md)                   | husk run/build/check/new, .env loading, fluxo interno     | ✓ v0.6  |
-| [ANALISADOR.md](ANALISADOR.md)     | Análise semântica, verificação de tipos e escopo          | ✓ v0.5  |
+| Documento                            | Conteúdo                                                   | Status  |
+|--------------------------------------|------------------------------------------------------------|---------|
+| [FUNCOES.md](FUNCOES.md)             | Definição, parâmetros, retorno, built-ins de conversão     | ✓ v1.0  |
+| [ROTAS.md](ROTAS.md)                 | HTTP, parâmetros tipados, CORS, porta, `-> ctx`, req       | ✓ v1.0  |
+| [TIPOS.md](TIPOS.md)                 | Primitivos, structs, map, `[]tipo`, conversão de tipos     | ✓ v1.0  |
+| [EXPRESSOES.md](EXPRESSOES.md)       | Operadores, if/else, for...in, chamadas, literais           | ✓ v1.0  |
+| [MODULOS.md](MODULOS.md)             | import, alias, stdlib, ciclo detection                     | ✓ v1.0  |
+| [MIDDLEWARES.md](MIDDLEWARES.md)     | Definição, `-> ctx`, contexto tipado, next()               | ✓ v0.6  |
+| [ERROS.md](ERROS.md)                 | (valor, error), `erro()`, let multi, `?`, err.message      | ✓ v1.0  |
+| [STRUCTS.md](STRUCTS.md)             | Definição, instanciação, acesso a campos, JSON             | ✓ v0.3  |
+| [TESTES.md](TESTES.md)               | `husk test`, `assert_eq()`, descoberta de testes           | ✓ v1.0  |
+| [CLI.md](CLI.md)                     | run/dev/build/test/check/fmt/add/new/lsp, source maps      | ✓ v1.0  |
+| [ANALISADOR.md](ANALISADOR.md)       | Análise semântica, built-ins, verificação de tipos/escopo  | ✓ v1.0  |

@@ -1,6 +1,6 @@
 # Rotas
 
-Rotas definem endpoints HTTP. O servidor usa `chi` por baixo e é iniciado automaticamente na porta `8080`.
+Rotas definem endpoints HTTP. O servidor usa `chi` por baixo.
 
 ## Sintaxe
 
@@ -22,6 +22,18 @@ route MÉTODO /caminho [middleware1, middleware2] -> ctx {
 
 `GET`, `POST`, `PUT`, `PATCH`, `DELETE`
 
+## Porta
+
+A porta do servidor é configurada pela variável de ambiente `PORT`:
+
+```sh
+PORT=3000 husk run main.husk
+```
+
+O padrão é `:8080`. O auto-prefixo `:` é adicionado se não estiver presente.
+
+---
+
 ## Exemplos
 
 ### Rota simples
@@ -34,7 +46,7 @@ route GET /hello {
 
 ### Parâmetro de caminho
 
-Use `:nome` para capturar segmentos dinâmicos. O valor fica disponível como variável no corpo.
+Use `:nome` para capturar segmentos dinâmicos.
 
 ```husk
 route GET /users/:id {
@@ -42,25 +54,21 @@ route GET /users/:id {
 }
 ```
 
-O parâmetro `:id` é mapeado para `{id}` no chi e pode ser lido via `req.params.id` ou usado diretamente como variável.
-
 ### Parâmetro tipado
 
-Declare o tipo após `:` entre `< >` para receber o valor já convertido:
+Declare o tipo entre `< >` para receber o valor já convertido:
 
 ```husk
 route GET /api/clientes/:id<int> {
-    // req.params.id já é int — sem parse_int()
     return json({ id: req.params.id })
 }
 
 route GET /medidas/:valor<float> {
-    // req.params.valor já é float64
     return json({ medido: req.params.valor })
 }
 ```
 
-Sem a anotação de tipo, o parâmetro é `string` (comportamento padrão).
+Sem anotação, o parâmetro é `string`.
 
 ### Retorno em JSON
 
@@ -72,9 +80,7 @@ route GET /ping {
 }
 ```
 
-Gera os headers `Content-Type: application/json` automaticamente.
-
-Objetos literais, structs, variáveis — tudo vira JSON sem precisar de `json()`.
+Gera `Content-Type: application/json` automaticamente.
 
 ### Retorno com status HTTP
 
@@ -88,11 +94,7 @@ route POST /item {
 }
 ```
 
-O body do `status()` também é JSON automático — não precisa de `json()`.
-
 ### Retorno de texto simples
-
-Use `text()` para resposta em texto puro (única exceção ao JSON automático):
 
 ```husk
 route GET /healthz {
@@ -102,17 +104,17 @@ route GET /healthz {
 
 ## Funções de resposta
 
-| Husk                    | Comportamento                              |
-|-------------------------|--------------------------------------------|
-| `return expr`           | serializa qualquer expressão como JSON     |
-| `return { ... }`        | serializa como JSON (atalho para expr)     |
-| `return text("...")`    | escreve texto puro (única exceção)         |
-| `return status(N)`      | define o status HTTP sem corpo             |
-| `return status(N, expr)` | define status e serializa body como JSON  |
+| Husk                           | Comportamento                          |
+|--------------------------------|----------------------------------------|
+| `return expr`                  | serializa como JSON                    |
+| `return { ... }`               | serializa como JSON                    |
+| `return text("...")`           | texto puro                             |
+| `return status(N)`             | status HTTP sem corpo                  |
+| `return status(N, expr)`       | status + body JSON                     |
 
 ## Variáveis implícitas
 
-Dentro de um bloco de rota, `req` está disponível automaticamente.
+Dentro de uma rota, `req` está disponível automaticamente.
 
 ### Parâmetros de path
 
@@ -143,7 +145,7 @@ route GET /busca {
 
 ### Body (JSON)
 
-Disponível em rotas `POST`, `PUT` e `PATCH`. O body é decodificado automaticamente como JSON quando qualquer campo é acessado.
+Disponível em `POST`, `PUT`, `PATCH`.
 
 ```husk
 route POST /login {
@@ -153,30 +155,7 @@ route POST /login {
 }
 ```
 
-O Go gerado decodifica o body uma vez no início do handler:
-
-```go
-var _huskBody map[string]interface{}
-json.NewDecoder(r.Body).Decode(&_huskBody)
-```
-
-Você também pode atribuir `req.body` a uma variável para reutilizar:
-
-```husk
-route POST /cadastro {
-    let body = req.body
-    if body["nome"] == "" {
-        return status(400, { erro: "Nome obrigatório" })
-    }
-    let nome = body["nome"]
-    let email = body["email"]
-    return status(201, { id: 1 })
-}
-```
-
 ## Middlewares por rota
-
-Aplique um ou mais middlewares declarando-os entre colchetes após o path:
 
 ```husk
 route GET /perfil [autenticado] {
@@ -188,41 +167,30 @@ route GET /admin [autenticado, admin] {
 }
 ```
 
-Ver [MIDDLEWARES.md](MIDDLEWARES.md) para como definir middlewares.
+## CORS
 
-### Verificação de role com `require_role`
+Configure CORS globalmente com o bloco `cors`:
 
-Para rotas que exigem uma role específica, use `require_role()` no corpo da rota.
-O primeiro argumento é o valor real (geralmente vindo do contexto), o segundo é o valor esperado:
+```husk
+cors {
+    origins: ["*"]
+    methods: ["GET", "POST"]
+    headers: ["Authorization", "Content-Type"]
+}
+```
+
+Campos disponíveis: `origins`, `methods`, `headers`. Gera middleware chi para todas as rotas.
+
+## Verificação de role com `require_role`
 
 ```husk
 route GET /admin [autenticado] -> ctx {
     require_role(ctx.role, "master")
-    // só chega aqui se ctx.role == "master"
     return "painel admin"
 }
 ```
 
-Gera:
-```go
-if ctx_role != "master" {
-    w.WriteHeader(403)
-    json.NewEncoder(w).Encode(map[string]interface{}{"erro": "Acesso restrito"})
-    return
-}
-```
-
-Mensagem customizada (3º argumento):
-
-```husk
-require_role(ctx.role, "admin", "Só administradores")
-```
-
 ### Contexto tipado via `-> ctx`
-
-Quando uma rota recebe `-> ctx`, ela ganha acesso a um objeto `ctx` com campos tipados
-setados pelos middlewares da cadeia. Isso substitui o padrão antigo
-`set_ctx("chave", valor)` / `req.ctx["chave"]` por algo type-safe:
 
 ```husk
 route GET /api/clientes [autenticado] -> ctx {
@@ -231,41 +199,17 @@ route GET /api/clientes [autenticado] -> ctx {
 }
 ```
 
-> O `ctx` só existe se houver um middleware na cadeia que o produza
-> (via `-> ctx` na definição do middleware).
-
-### `require_field` — validação de campos obrigatórios
-
-Valida que um campo do body não está vazio antes de prosseguir:
+## `require_field` — validação de campos obrigatórios
 
 ```husk
 route POST /usuarios {
     require_field("nome")
     require_field("email")
-    let body = req.body
-    // só chega aqui se nome e email não estão vazios
     return status(201, { ok: true })
 }
 ```
 
-Equivalente a:
-
-```husk
-if body["nome"] == "" || body["nome"] == nil {
-    return status(400, { erro: "Campo obrigatório: nome" })
-}
-```
-
-Mensagem customizada:
-
-```husk
-require_field("cpf", "CPF é obrigatório para pessoa física")
-```
-
-> `require_field` acessa `req.body` internamente, então o body JSON é decodificado automaticamente.
-
 ## Notas
 
-- Não existe ordem de declaração — uma rota pode chamar uma função definida depois dela no arquivo.
-- Todas as rotas do arquivo são registradas no mesmo router e servidas na mesma porta.
-- A porta padrão é `8080`. Configuração de porta virá em versão futura.
+- Todas as rotas são registradas no mesmo router e servidas na mesma porta.
+- A porta é lida de `PORT` (env var) com fallback para `:8080`.

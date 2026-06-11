@@ -80,19 +80,33 @@ Um map pode ser desestruturado como argumentos de função com `...`:
 let cliente = clientes.criar(body...)? 500 "Erro"
 ```
 
-Equivalente a:
+Mapeia as chaves do map para os nomes dos parâmetros da função.
+
+## Laço `for...in`
+
+Itera sobre os elementos de uma lista ou array:
 
 ```husk
-let cliente = clientes.criar(
-    body["nome"], body["cpf_cnpj"], body["tipo"],
-    body["segmento"], body["telefone"], body["email"],
-    // ...
-)? 500 "Erro"
+for item in items {
+    return item
+}
 ```
 
-O `...` mapeia as **chaves do map** para os **nomes dos parâmetros** da função automaticamente. Os tipos são convertidos conforme o parâmetro espera (`string`, `int`, `float`, `bool`).
+Gera `for _, item := range items { ... }` no Go. Útil para percorrer resultados de queries:
 
-## Condicional
+```husk
+route GET /lista {
+    let rows, err = db.query("SELECT id, nome FROM usuarios")
+    if err != nil {
+        return status(500, json({ erro: err.message }))
+    }
+    for row in rows {
+        return json(row)
+    }
+}
+```
+
+# Condicional
 
 ```husk
 if condicao {
@@ -116,8 +130,6 @@ if err != nil {
 return json(val)
 ```
 
-`if`/`else` pode aparecer em funções e em rotas. Dentro de rotas, `return` dentro de um bloco `if` funciona normalmente.
-
 ## Literais
 
 ```husk
@@ -129,8 +141,6 @@ false       // bool
 ```
 
 ## Objeto literal
-
-Usado principalmente como argumento de `json()`:
 
 ```husk
 { chave: "valor", numero: 42 }
