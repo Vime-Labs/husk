@@ -370,12 +370,12 @@ impl Codegen {
         let result = match stmt {
             Stmt::Return(exprs) => self.gen_return(exprs, ctx),
             Stmt::Let(l) => {
-                let op = if declared.contains(&l.name) {
+                let op = if l.name == "_" || declared.contains(&l.name) {
                     "="
                 } else {
                     ":="
                 };
-                declared.insert(l.name.clone());
+                if l.name != "_" { declared.insert(l.name.clone()); }
                 let expr = self.gen_expr(&l.value, ctx)?;
                 Ok(format!("{} {} {}", l.name, op, expr))
             }
