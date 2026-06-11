@@ -57,7 +57,7 @@ impl TypeInfo {
             TypeInfo::Error => "error",
             TypeInfo::Map => "map",
             TypeInfo::List(_) => "list",
-            TypeInfo::Struct(n) => "(struct)",
+            TypeInfo::Struct(_n) => "(struct)",
             TypeInfo::Unknown => "unknown",
         }
     }
@@ -102,7 +102,8 @@ impl Scope {
         }
     }
 
-    /// Declara um símbolo no escopo atual. Retorna erro se já existir.
+    /// Declara um símbolo no escopo atual. Retorna erro se já existir (scope global)
+    /// ou permite shadowing em escopos locais.
     pub fn declare(
         &mut self,
         name: &str,
@@ -117,6 +118,12 @@ impl Scope {
         }
         self.symbols.insert(name.to_string(), symbol);
         Ok(())
+    }
+
+    /// Declara ou substitui um símbolo no escopo atual (shadowing).
+    /// Usado para variáveis locais que podem ser redeclaradas.
+    pub fn declare_or_shadow(&mut self, name: &str, symbol: Symbol) {
+        self.symbols.insert(name.to_string(), symbol);
     }
 
     /// Busca um símbolo na cadeia de escopos

@@ -84,5 +84,5 @@ fn desconto(p Produto, pct float) Produto {
 | `string`  | `string`     |
 | `bool`    | `bool`       |
 | `NomeTipo`| `NomeTipo`   |
-
-Tipos compostos como slices e maps não são suportados como campos de struct em v0.5. Use `json()` com objeto literal para respostas que precisam de listas.
+| `map`     | `map[string]interface{}` |
+| `[]tipo`  | `[]Tipo`     |

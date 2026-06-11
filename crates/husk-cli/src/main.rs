@@ -1,6 +1,10 @@
+use husk_analyzer::analyze as analyze_semantic;
 use husk_codegen::Codegen;
 use husk_lexer::Lexer;
-use husk_parser::{Parser, ast::{Item, Program}};
+use husk_parser::{
+    Parser,
+    ast::{Item, Program},
+};
 use std::{
     collections::HashSet,
     env, fs,
@@ -22,10 +26,20 @@ struct StdlibDeps {
 
 impl StdlibDeps {
     fn from_program(program: &Program) -> Self {
-        let modules = program.items.iter()
-            .filter_map(|i| if let Item::Import(imp) = i {
-                if imp.is_stdlib { Some(imp.path.clone()) } else { None }
-            } else { None })
+        let modules = program
+            .items
+            .iter()
+            .filter_map(|i| {
+                if let Item::Import(imp) = i {
+                    if imp.is_stdlib {
+                        Some(imp.path.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
             .collect();
         StdlibDeps { modules }
     }
@@ -65,21 +79,21 @@ impl StdlibDeps {
 }
 
 // ANSI sem dependências
-const BOLD:  &str = "\x1b[1m";
-const DIM:   &str = "\x1b[2m";
+const BOLD: &str = "\x1b[1m";
+const DIM: &str = "\x1b[2m";
 const GREEN: &str = "\x1b[32m";
-const CYAN:  &str = "\x1b[36m";
-const RED:   &str = "\x1b[31m";
+const CYAN: &str = "\x1b[36m";
+const RED: &str = "\x1b[31m";
 const RESET: &str = "\x1b[0m";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     match args.get(1).map(|s| s.as_str()) {
-        Some("run")   => cmd_run(&args),
+        Some("run") => cmd_run(&args),
         Some("build") => cmd_build(&args),
         Some("check") => cmd_check(&args),
-        Some("new")   => cmd_new(&args),
+        Some("new") => cmd_new(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
             eprintln!();
@@ -101,7 +115,10 @@ fn cmd_run(args: &[String]) {
     step("dependências", "resolvendo...");
     let start = Instant::now();
     go_mod_tidy(&dir, file);
-    ok(&format!("dependências prontas {DIM}({:.1}s){RESET}", start.elapsed().as_secs_f32()));
+    ok(&format!(
+        "dependências prontas {DIM}({:.1}s){RESET}",
+        start.elapsed().as_secs_f32()
+    ));
 
     step("servidor", "iniciando...");
     let status = Command::new("go")
@@ -115,7 +132,11 @@ fn cmd_run(args: &[String]) {
 
 fn cmd_build(args: &[String]) {
     let file = require_file(args);
-    let stem = Path::new(file).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let stem = Path::new(file)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let (go_code, stdlib) = transpile_file(file);
     let dir = prepare_go_dir(file, &go_code, &stdlib);
 
@@ -183,18 +204,17 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
     let step_start = Instant::now();
     step("transpilando", file);
 
-    let source = fs::read_to_string(file).unwrap_or_else(|e| {
-        die(&format!("erro ao ler '{file}': {e}"))
-    });
+    let source =
+        fs::read_to_string(file).unwrap_or_else(|e| die(&format!("erro ao ler '{file}': {e}")));
 
     let base_dir = Path::new(file).parent().unwrap_or(Path::new("."));
     let program = parse_source(&source, file);
     let merged = resolve_imports(program, base_dir, &mut HashSet::new(), file);
     let stdlib = StdlibDeps::from_program(&merged);
 
-    let go_code = Codegen::new().generate(&merged).unwrap_or_else(|e| {
-        die(&format!("{file}: erro de geração: {}", e.message))
-    });
+    let go_code = Codegen::new()
+        .generate(&merged)
+        .unwrap_or_else(|e| die(&format!("{file}: erro de geração: {}", e.message)));
 
     ok(&format!(
         "{BOLD}{file}{RESET} → Go {DIM}({:.0}ms){RESET}",
@@ -208,15 +228,33 @@ fn parse_source(source: &str, file: &str) -> Program {
     let tokens = Lexer::new(source).tokenize().unwrap_or_else(|e| {
         die(&format!(
             "{BOLD}{file}:{}{RESET} erro léxico: {}",
-            format_span(e.span.line, e.span.col), e.message
+            format_span(e.span.line, e.span.col),
+            e.message
         ))
     });
-    Parser::new(tokens).parse().unwrap_or_else(|e| {
+    let program = Parser::new(tokens).parse().unwrap_or_else(|e| {
         die(&format!(
             "{BOLD}{file}:{}{RESET} erro de sintaxe: {}",
-            format_span(e.span.line, e.span.col), e.message
+            format_span(e.span.line, e.span.col),
+            e.message
         ))
-    })
+    });
+
+    // Análise semântica
+    let sem_errors = analyze_semantic(&program);
+    if !sem_errors.is_empty() {
+        for err in &sem_errors {
+            eprintln!(
+                "{RED}{BOLD}{}:{}{RESET} erro semântico: {}",
+                file,
+                format_span(err.span.line, err.span.col),
+                err.message
+            );
+        }
+        process::exit(1);
+    }
+
+    program
 }
 
 fn resolve_imports(
@@ -225,31 +263,52 @@ fn resolve_imports(
     visited: &mut HashSet<PathBuf>,
     current_file: &str,
 ) -> Program {
-    let imports: Vec<_> = program.items.iter()
-        .filter_map(|i| if let Item::Import(imp) = i { Some(imp.clone()) } else { None })
+    let imports: Vec<_> = program
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let Item::Import(imp) = i {
+                Some(imp.clone())
+            } else {
+                None
+            }
+        })
         .collect();
 
     for imp in imports {
         // imports stdlib são tratados via shims Go — não há arquivo .husk para resolver
-        if imp.is_stdlib { continue; }
+        if imp.is_stdlib {
+            continue;
+        }
 
         let mut path = base_dir.join(&imp.path);
-        if path.extension().is_none() { path.set_extension("husk"); }
+        if path.extension().is_none() {
+            path.set_extension("husk");
+        }
 
         let canonical = path.canonicalize().unwrap_or_else(|_| {
-            die(&format!("{current_file}: módulo não encontrado: '{}'", imp.path))
+            die(&format!(
+                "{current_file}: módulo não encontrado: '{}'",
+                imp.path
+            ))
         });
 
-        if visited.contains(&canonical) { continue; }
+        if visited.contains(&canonical) {
+            continue;
+        }
         visited.insert(canonical.clone());
 
         let source = fs::read_to_string(&canonical).unwrap_or_else(|e| {
-            die(&format!("{current_file}: erro ao ler módulo '{}': {e}", imp.path))
+            die(&format!(
+                "{current_file}: erro ao ler módulo '{}': {e}",
+                imp.path
+            ))
         });
 
         let mod_program = parse_source(&source, &canonical.to_string_lossy());
         let mod_dir = canonical.parent().unwrap_or(Path::new("."));
-        let mod_program = resolve_imports(mod_program, mod_dir, visited, &canonical.to_string_lossy());
+        let mod_program =
+            resolve_imports(mod_program, mod_dir, visited, &canonical.to_string_lossy());
 
         for item in mod_program.items {
             match item {
@@ -265,7 +324,11 @@ fn resolve_imports(
 // --- Go helpers ---
 
 fn prepare_go_dir(husk_file: &str, go_code: &str, stdlib: &StdlibDeps) -> PathBuf {
-    let stem = Path::new(husk_file).file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let stem = Path::new(husk_file)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
     let dir = env::temp_dir().join(format!("husk_{stem}"));
     fs::create_dir_all(&dir).expect("falha ao criar diretório temporário");
 
@@ -299,7 +362,8 @@ fn go_mod_tidy(dir: &Path, husk_file: &str) {
 
 fn write_file(path: &Path, content: &str) {
     let mut f = fs::File::create(path).expect("falha ao criar arquivo");
-    f.write_all(content.as_bytes()).expect("falha ao escrever arquivo");
+    f.write_all(content.as_bytes())
+        .expect("falha ao escrever arquivo");
 }
 
 // --- output helpers ---
@@ -322,7 +386,7 @@ fn format_span(line: usize, col: usize) -> String {
 }
 
 fn require_file<'a>(args: &'a [String]) -> &'a str {
-    args.get(2).map(|s| s.as_str()).unwrap_or_else(|| {
-        die("informe o arquivo: husk run <arquivo.husk>")
-    })
+    args.get(2)
+        .map(|s| s.as_str())
+        .unwrap_or_else(|| die("informe o arquivo: husk run <arquivo.husk>"))
 }

@@ -34,7 +34,7 @@ route GET /users/:id {
 }
 ```
 
-O parâmetro `:id` é mapeado para `{id}` no chi e deve ser lido via `req.params` (disponível a partir do v0.4).
+O parâmetro `:id` é mapeado para `{id}` no chi e pode ser lido via `req.params.id` ou usado diretamente como variável.
 
 ### Retorno em JSON
 

@@ -13,3 +13,4 @@ Referência da linguagem Husk. Cada arquivo cobre uma parte da linguagem.
 | [ERROS.md](ERROS.md)               | (valor, error), let multi, err.message, nil               | ✓ v0.4  |
 | [STRUCTS.md](STRUCTS.md)           | Instanciação, acesso a campos, JSON                       | ✓ v0.3  |
 | [CLI.md](CLI.md)                   | husk run/build/check/new, instalação, fluxo interno       | ✓ v0.5  |
+| [ANALISADOR.md](ANALISADOR.md)     | Análise semântica, verificação de tipos e escopo          | ✓ v0.5  |

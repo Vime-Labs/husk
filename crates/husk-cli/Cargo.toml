@@ -8,6 +8,7 @@ name = "husk"
 path = "src/main.rs"
 
 [dependencies]
-husk-lexer   = { path = "../husk-lexer" }
-husk-parser  = { path = "../husk-parser" }
-husk-codegen = { path = "../husk-codegen" }
+husk-lexer    = { path = "../husk-lexer" }
+husk-parser   = { path = "../husk-parser" }
+husk-codegen  = { path = "../husk-codegen" }
+husk-analyzer = { path = "../husk-analyzer" }

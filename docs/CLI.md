@@ -43,13 +43,13 @@ O binário resultante é autossuficiente — não precisa de Go instalado no ser
 
 ### `husk check <arquivo.husk>`
 
-Verifica sintaxe e codegen sem gerar nenhum artefato. Útil para CI ou em editores.
+Verifica sintaxe, semântica e codegen sem gerar nenhum artefato. Útil para CI ou em editores.
 
 ```sh
 husk check main.husk
 ```
 
-Termina com código 0 se não houver erros, 1 caso contrário.
+Inclui análise de tipos, escopo e regras da linguagem. Termina com código 0 se não houver erros, 1 caso contrário.
 
 ### `husk new <nome>`
 
@@ -69,22 +69,25 @@ husk run main.husk
 arquivo.husk
     │
     ▼
-  Lexer          tokenização
+  Lexer              tokenização
     │
     ▼
-  Parser         AST
+  Parser             AST
     │
     ▼
-  resolve_imports   inline dos módulos locais + copia shims da stdlib
+  Analisador         verificação de tipos e escopo ← novo
     │
     ▼
-  Codegen        Go (package main)
+  resolve_imports    inline dos módulos locais + copia shims da stdlib
     │
     ▼
-  go mod tidy    baixa dependências Go
+  Codegen            Go (package main)
     │
     ▼
-  go run .       ou  go build -o <nome> .
+  go mod tidy        baixa dependências Go
+    │
+    ▼
+  go run .           ou  go build -o <nome> .
 ```
 
 ---

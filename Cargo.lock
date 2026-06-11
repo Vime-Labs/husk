@@ -14,6 +14,7 @@ dependencies = [
 name = "husk-cli"
 version = "0.1.0"
 dependencies = [
+ "husk-analyzer",
  "husk-codegen",
  "husk-lexer",
  "husk-parser",
