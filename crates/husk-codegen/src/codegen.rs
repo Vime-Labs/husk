@@ -1021,4 +1021,45 @@ fn f() string {
         assert!(go.contains("err.Error()"));
         assert!(go.contains("err != nil"));
     }
+
+    #[test]
+    fn test_middleware_return_status_json() {
+        // Middleware com return status/json deve gerar resposta HTTP, não return Go
+        let go = codegen(
+            r#"
+middleware auth {
+    let token = req.headers["Authorization"]
+    if token == "" {
+        return status(401, json({ erro: "token ausente" }))
+    }
+    next()
+}
+route GET /perfil [auth] {
+    return "ok"
+}
+"#,
+        );
+        // Deve gerar w.WriteHeader + json.NewEncoder em vez de "return status("
+        assert!(
+            !go.contains("return status("),
+            "não deve gerar 'return status' literal"
+        );
+        assert!(go.contains("w.WriteHeader(401)"));
+        assert!(go.contains("json.NewEncoder(w).Encode"));
+        assert!(go.contains("next.ServeHTTP(w, r)"));
+    }
+
+    #[test]
+    fn test_req_body_type_assertion() {
+        // req.body["x"] deve gerar type assertion .(string)
+        let go = codegen(
+            r#"
+route POST /login {
+    let email = req.body["email"]
+    return email
+}
+"#,
+        );
+        assert!(go.contains("_huskBody[\"email\"].(string)"));
+    }
 }
