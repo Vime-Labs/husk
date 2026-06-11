@@ -143,11 +143,24 @@ impl Codegen {
     fn scan_expr_imports(&mut self, expr: &Expr) {
         match expr {
             Expr::Call(call) => {
+                if is_builtin(&call.callee, "set_ctx") {
+                    self.go_imports.insert("context".into());
+                }
                 for arg in &call.args { self.scan_expr_imports(arg); }
+            }
+            // req.ctx["X"] — leitura do contexto
+            Expr::Index(obj, _) => {
+                if let Expr::FieldAccess(inner, field) = obj.as_ref() {
+                    if let Expr::Ident(name) = inner.as_ref() {
+                        if name == "req" && field == "ctx" {
+                            self.go_imports.insert("context".into());
+                        }
+                    }
+                }
+                self.scan_expr_imports(obj);
             }
             Expr::BinOp(l, _, r) => { self.scan_expr_imports(l); self.scan_expr_imports(r); }
             Expr::Unary(_, e) | Expr::FieldAccess(e, _) => self.scan_expr_imports(e),
-            Expr::Index(e, i) => { self.scan_expr_imports(e); self.scan_expr_imports(i); }
             _ => {}
         }
     }
@@ -267,9 +280,10 @@ impl Codegen {
     fn gen_block(&self, block: &Block, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
         let mut s = String::new();
         let pad = "\t".repeat(indent);
+        let mut declared: HashSet<String> = HashSet::new();
 
         for stmt in &block.stmts {
-            let generated = self.gen_stmt(stmt, ctx, indent)?;
+            let generated = self.gen_stmt(stmt, ctx, indent, &mut declared)?;
             for line in generated.lines() {
                 s.push_str(&pad);
                 s.push_str(line);
@@ -279,11 +293,21 @@ impl Codegen {
         Ok(s)
     }
 
-    fn gen_stmt(&self, stmt: &Stmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
+    fn gen_stmt(&self, stmt: &Stmt, ctx: Ctx, indent: usize, declared: &mut HashSet<String>) -> Result<String, CodegenError> {
         match stmt {
             Stmt::Return(exprs)  => self.gen_return(exprs, ctx),
-            Stmt::Let(l)         => Ok(format!("{} := {}", l.name, self.gen_expr(&l.value, ctx)?)),
-            Stmt::LetMulti(l)    => Ok(format!("{} := {}", l.names.join(", "), self.gen_expr(&l.value, ctx)?)),
+            Stmt::Let(l) => {
+                let op = if declared.contains(&l.name) { "=" } else { ":=" };
+                declared.insert(l.name.clone());
+                Ok(format!("{} {} {}", l.name, op, self.gen_expr(&l.value, ctx)?))
+            }
+            Stmt::LetMulti(l) => {
+                // Go exige ao menos um nome novo para :=; se todos já existem, usa =
+                let all_declared = l.names.iter().all(|n| declared.contains(n));
+                let op = if all_declared { "=" } else { ":=" };
+                for n in &l.names { declared.insert(n.clone()); }
+                Ok(format!("{} {} {}", l.names.join(", "), op, self.gen_expr(&l.value, ctx)?))
+            }
             Stmt::If(i)          => self.gen_if(i, ctx, indent),
             Stmt::Expr(e)        => self.gen_expr(e, ctx),
         }
@@ -420,6 +444,7 @@ impl Codegen {
         // req.headers["X"] → r.Header.Get("X")
         // req.query["X"]   → r.URL.Query().Get("X")
         // req.body["X"]    → _huskBody["X"]
+        // req.ctx["X"]     → r.Context().Value("X")
         if let Expr::FieldAccess(inner, field) = obj {
             if let Expr::Ident(name) = inner.as_ref() {
                 if name == "req" {
@@ -428,6 +453,7 @@ impl Codegen {
                         "headers" => format!("r.Header.Get({})", key),
                         "query"   => format!("r.URL.Query().Get({})", key),
                         "body"    => format!("_huskBody[{}]", key),
+                        "ctx"     => format!("r.Context().Value({})", key),
                         _         => format!("r.{}[{}]", capitalize(field), key),
                     });
                 }
@@ -442,6 +468,21 @@ impl Codegen {
             if name == "next" && ctx == Ctx::Middleware {
                 return Ok("next.ServeHTTP(w, r)".into());
             }
+        }
+
+        // set_ctx("key", valor) → ctx := context.WithValue(r.Context(), "key", valor)
+        //                         r = r.WithContext(ctx)
+        if is_builtin(&call.callee, "set_ctx") {
+            let key = call.args.first()
+                .ok_or_else(|| CodegenError::new("set_ctx() requer uma chave string"))?;
+            let val = call.args.get(1)
+                .ok_or_else(|| CodegenError::new("set_ctx() requer um valor"))?;
+            let key_go = self.gen_expr(key, ctx)?;
+            let val_go = self.gen_expr(val, ctx)?;
+            return Ok(format!(
+                "_huskCtx := context.WithValue(r.Context(), {}, {})\nr = r.WithContext(_huskCtx)",
+                key_go, val_go
+            ));
         }
 
         // alias.metodo(args)
@@ -692,6 +733,51 @@ fn f() string {
 }
 "#);
         assert!(go.contains("val, err := buscar(1)"));
+    }
+
+    #[test]
+    fn test_shadowing_simples() {
+        let go = codegen(r#"
+fn f() string {
+    let err = "primeiro"
+    let err = "segundo"
+    return err
+}
+"#);
+        // primeira declaração: :=, segunda: =
+        assert!(go.contains("err := \"primeiro\""));
+        assert!(go.contains("err = \"segundo\""));
+    }
+
+    #[test]
+    fn test_shadowing_multi() {
+        let go = codegen(r#"
+fn buscar(x int) (string, error) { return "x", nil }
+fn f() string {
+    let a, err = buscar(1)
+    let b, err = buscar(2)
+    return a
+}
+"#);
+        // primeira: := (a e err são novos)
+        assert!(go.contains("a, err := buscar(1)"));
+        // segunda: := (b é novo, mesmo err já existindo — Go aceita)
+        assert!(go.contains("b, err := buscar(2)"));
+    }
+
+    #[test]
+    fn test_shadowing_multi_todos_existentes() {
+        let go = codegen(r#"
+fn buscar(x int) (string, error) { return "x", nil }
+fn f() string {
+    let a, err = buscar(1)
+    let a, err = buscar(2)
+    return a
+}
+"#);
+        assert!(go.contains("a, err := buscar(1)"));
+        // ambos já declarados → =
+        assert!(go.contains("a, err = buscar(2)"));
     }
 
     #[test]
