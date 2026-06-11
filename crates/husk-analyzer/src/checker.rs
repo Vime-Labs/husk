@@ -370,6 +370,28 @@ impl Checker {
                 all.extend(else_returns);
                 all
             }
+            Stmt::ForIn(f) => {
+                let collection_ty = self.check_expr(&f.collection, scope, ctx);
+                let item_ty = match &collection_ty {
+                    TypeInfo::List(inner) => *inner.clone(),
+                    TypeInfo::Map => TypeInfo::String,
+                    TypeInfo::Unknown => TypeInfo::Unknown,
+                    _ => {
+                        self.errors.push(SemanticError::new(
+                            format!(
+                                "'for...in' requer uma lista ou map, encontrado '{}'",
+                                collection_ty.name()
+                            ),
+                            Span { line: 0, col: 0 },
+                        ));
+                        TypeInfo::Unknown
+                    }
+                };
+                let mut for_scope = scope.child();
+                for_scope.declare_or_shadow(&f.item, Symbol::Variable(item_ty));
+                self.check_block(&f.body, &mut for_scope, ctx);
+                vec![]
+            }
             Stmt::Assign(a) => {
                 self.check_expr(&a.target, scope, ctx);
                 self.check_expr(&a.value, scope, ctx);

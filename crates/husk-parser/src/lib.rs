@@ -164,4 +164,38 @@ fn f(ok bool) {
         };
         assert!(matches!(f.body.stmts[0], Stmt::If(_)));
     }
+
+    #[test]
+    fn test_for_in_simples() {
+        let prog = parse(
+            r#"
+fn f() {
+    for item in items {
+        return item
+    }
+}
+"#,
+        );
+        let Item::FnDef(f) = &prog.items[0] else {
+            panic!()
+        };
+        assert!(matches!(f.body.stmts[0], Stmt::ForIn(_)));
+    }
+
+    #[test]
+    fn test_for_in_com_json() {
+        let prog = parse(
+            r#"
+route GET /list {
+    for item in items {
+        return json(item)
+    }
+}
+"#,
+        );
+        let Item::RouteDef(r) = &prog.items[0] else {
+            panic!()
+        };
+        assert!(matches!(r.body.stmts[0], Stmt::ForIn(_)));
+    }
 }

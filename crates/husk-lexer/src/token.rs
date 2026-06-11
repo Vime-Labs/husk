@@ -25,6 +25,8 @@ pub enum TokenKind {
     As,
     Struct,
     Nil,
+    For,
+    In,
 
     // Métodos HTTP
     Get,

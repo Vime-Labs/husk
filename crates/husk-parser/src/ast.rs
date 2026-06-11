@@ -150,6 +150,8 @@ pub enum Stmt {
     /// let x = expr?  — try com propagação de erro HTTP
     TryLet(TryLetStmt),
     If(IfStmt),
+    /// for item in expr { body }
+    ForIn(ForInStmt),
     /// assignment: target = expr  (e.g. ctx.field = value)
     Assign(AssignStmt),
     Expr(Expr),
@@ -192,13 +194,21 @@ pub struct IfStmt {
     pub else_block: Option<Block>,
 }
 
-/// target = value — usado para ctx.field = expr
-#[derive(Debug, Clone)]
-pub struct AssignStmt {
-    /// O alvo da atribuição (ex: ctx.field acessado como FieldAccess(Ident("ctx"), "field"))
-    pub target: Box<Expr>,
-    pub value: Expr,
-}
+    /// for item in expr { body }
+    #[derive(Debug, Clone)]
+    pub struct ForInStmt {
+        pub item: String,
+        pub collection: Expr,
+        pub body: Block,
+    }
+
+    /// target = value — usado para ctx.field = expr
+    #[derive(Debug, Clone)]
+    pub struct AssignStmt {
+        /// O alvo da atribuição (ex: ctx.field acessado como FieldAccess(Ident("ctx"), "field"))
+        pub target: Box<Expr>,
+        pub value: Expr,
+    }
 
 #[derive(Debug, Clone)]
 pub enum Expr {

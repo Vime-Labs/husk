@@ -43,6 +43,10 @@ pub struct Codegen {
     current_ctx_name: RefCell<Option<String>>,
     /// Nome do middleware atual (para namespacing do ctx)
     current_middleware_name: RefCell<Option<String>>,
+    /// Nome do arquivo .husk fonte (para source maps)
+    source_file: Option<String>,
+    /// Mapa: linha Go → (arquivo husk, linha husk)
+    source_map: RefCell<Vec<(usize, String, usize)>>,
 }
 
 impl Codegen {
@@ -58,6 +62,25 @@ impl Codegen {
             current_route_path: RefCell::new(None),
             current_ctx_name: RefCell::new(None),
             current_middleware_name: RefCell::new(None),
+            source_file: None,
+            source_map: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn set_source_file(&mut self, file: &str) {
+        self.source_file = Some(file.to_string());
+    }
+
+    /// Retorna o mapa de source maps: lista de (linha_go, arquivo_husk, linha_husk)
+    pub fn get_source_map(&self) -> Vec<(usize, String, usize)> {
+        self.source_map.borrow().clone()
+    }
+
+    fn source_map_comment(&self, line: usize) -> String {
+        if let Some(ref file) = self.source_file {
+            format!("// husk:{}:{}\n", file, line)
+        } else {
+            String::new()
         }
     }
 
@@ -182,6 +205,10 @@ impl Codegen {
                 // TryLet usa json e encoding/json
                 self.go_imports.insert("encoding/json".into());
                 self.scan_expr_imports(&t.call);
+            }
+            Stmt::ForIn(f) => {
+                self.scan_expr_imports(&f.collection);
+                self.scan_block_imports(&f.body, ctx);
             }
             Stmt::If(i) => {
                 self.scan_block_imports(&i.then_block, ctx);
@@ -348,7 +375,12 @@ impl Codegen {
             }
         };
 
-        let mut s = format!("func {}({}){} {{\n", f.name, params, ret);
+        let mut s = String::new();
+        let cmt = self.source_map_comment(f.span.line);
+        if !cmt.is_empty() {
+            s.push_str(&cmt);
+        }
+        s.push_str(&format!("func {}({}){} {{\n", f.name, params, ret));
         s.push_str(&self.gen_block(&f.body, Ctx::Fn, 1)?);
         s.push_str("}\n\n");
         Ok(s)
@@ -360,11 +392,16 @@ impl Codegen {
         *self.current_middleware_name.borrow_mut() = Some(m.name.clone());
         *self.current_ctx_name.borrow_mut() = m.ctx_var.clone();
 
-        let mut s = format!(
+        let mut s = String::new();
+        let cmt = self.source_map_comment(m.span.line);
+        if !cmt.is_empty() {
+            s.push_str(&cmt);
+        }
+        s.push_str(&format!(
             "func {}(next http.Handler) http.Handler {{\n\
              \treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{\n",
             m.name
-        );
+        ));
         s.push_str(&self.gen_block(&m.body, Ctx::Middleware, 2)?);
         s.push_str("\t})\n}\n\n");
 
@@ -431,10 +468,17 @@ impl Codegen {
             format!("r.With({})", route.middlewares.join(", "))
         };
 
-        let mut s = format!(
+        let mut s = String::new();
+        let cmt = self.source_map_comment(route.span.line);
+        if !cmt.is_empty() {
+            // indent comment to match route registration indentation
+            s.push_str("\t");
+            s.push_str(&cmt);
+        }
+        s.push_str(&format!(
             "\t{}.{}(\"{}\", func(w http.ResponseWriter, r *http.Request) {{\n",
             router, method, path
-        );
+        ));
 
         // Typed params: :id<int> → gera variável pré-parseada
         // (import strconv já foi adicionado na fase de scan)
@@ -553,6 +597,7 @@ impl Codegen {
                     self.gen_expr(&l.value, ctx)?
                 ))
             }
+            Stmt::ForIn(f) => self.gen_for_in(f, ctx, indent),
             Stmt::If(i) => self.gen_if(i, ctx, indent),
             Stmt::TryLet(t) => self.gen_try_let(t, ctx),
             Stmt::Assign(a) => self.gen_assign(a, ctx),
@@ -666,6 +711,28 @@ impl Codegen {
                 ))
             }
         }
+    }
+
+    fn gen_for_in(&self, f: &ForInStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
+        let inner = "\t".repeat(indent + 1);
+
+        let collection = self.gen_expr(&f.collection, ctx)?;
+        let body = self.gen_block(&f.body, ctx, indent + 1)?;
+        // body lines have indent+1 tabs; strip them and add just 1 \t relative
+        // to base, since gen_block will prepend `indent` tabs to each line
+        let body_str = body
+            .lines()
+            .map(|l| {
+                let stripped = l.strip_prefix(&inner).unwrap_or(l);
+                format!("\t{}", stripped)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        Ok(format!(
+            "for _, {} := range {} {{\n{}\n}}",
+            f.item, collection, body_str
+        ))
     }
 
     fn gen_if(&self, i: &IfStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
@@ -1289,6 +1356,9 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
         Stmt::Let(l) => expr_uses_body(&l.value),
         Stmt::LetMulti(l) => expr_uses_body(&l.value),
         Stmt::Expr(e) => expr_uses_body(e),
+        Stmt::ForIn(f) => {
+            expr_uses_body(&f.collection) || block_uses_body(&f.body)
+        }
         Stmt::If(i) => {
             block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
         }
@@ -1974,5 +2044,88 @@ route GET /perfil [autenticado] -> ctx {
         assert!(go.contains("context.WithValue(r.Context(), \"__husk_ctx_role\""));
         assert!(go.contains("context.WithValue(r.Context(), \"__husk_ctx_user_id\""));
         assert!(go.contains("r = r.WithContext("));
+    }
+
+    // ---- for...in ----
+
+    #[test]
+    fn test_for_in_lista_string() {
+        let go = codegen(
+            r#"
+fn f(items []string) {
+    for item in items {
+        return item
+    }
+}
+"#,
+        );
+        assert!(go.contains("for _, item := range items {"));
+        assert!(go.contains("return item"));
+    }
+
+    #[test]
+    fn test_for_in_em_rota() {
+        let go = codegen(
+            r#"
+route GET /list {
+    let items = req.body["items"]
+    for item in items {
+        return item
+    }
+}
+"#,
+        );
+        assert!(go.contains("for _, item := range items"));
+        assert!(go.contains("json.NewEncoder(w).Encode(item)"));
+    }
+
+    // ---- source maps ----
+
+    #[test]
+    fn test_source_map_fn() {
+        let mut cg = Codegen::new();
+        cg.set_source_file("app.husk");
+        let tokens = Lexer::new("fn saudacao() string {\n    return \"oi\"\n}").tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        let go = cg.generate(&program).unwrap();
+        assert!(go.contains("// husk:app.husk:1"));
+    }
+
+    #[test]
+    fn test_source_map_route() {
+        let mut cg = Codegen::new();
+        cg.set_source_file("router.husk");
+        let tokens = Lexer::new(r#"route GET /ping {
+    return "ok"
+}
+"#).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        let go = cg.generate(&program).unwrap();
+        assert!(go.contains("// husk:router.husk:1"));
+    }
+
+    #[test]
+    fn test_source_map_middleware() {
+        let mut cg = Codegen::new();
+        cg.set_source_file("auth.husk");
+        let tokens = Lexer::new(r#"middleware auth {
+    next()
+}
+"#).tokenize().unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        let go = cg.generate(&program).unwrap();
+        assert!(go.contains("// husk:auth.husk:1"));
+    }
+
+    #[test]
+    fn test_source_map_not_emitted_when_unset() {
+        let go = codegen(
+            r#"
+fn ola() string {
+    return "oi"
+}
+"#,
+        );
+        assert!(!go.contains("// husk:"));
     }
 }

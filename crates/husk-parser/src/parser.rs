@@ -299,6 +299,7 @@ impl Parser {
             }
             TokenKind::Let => self.parse_let(),
             TokenKind::If => Ok(Stmt::If(self.parse_if()?)),
+            TokenKind::For => Ok(Stmt::ForIn(self.parse_for_in()?)),
             _ => {
                 let expr = self.parse_expr()?;
                 // ctx.field = value  — assignment
@@ -349,6 +350,19 @@ impl Parser {
             ty,
             value,
         }))
+    }
+
+    fn parse_for_in(&mut self) -> Result<ForInStmt, ParseError> {
+        self.expect(TokenKind::For)?;
+        let item = self.expect_ident()?;
+        self.expect(TokenKind::In)?;
+        let collection = self.parse_expr()?;
+        let body = self.parse_block()?;
+        Ok(ForInStmt {
+            item,
+            collection,
+            body,
+        })
     }
 
     fn parse_if(&mut self) -> Result<IfStmt, ParseError> {

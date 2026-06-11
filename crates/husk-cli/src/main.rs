@@ -121,13 +121,20 @@ fn cmd_run(args: &[String]) {
     ));
 
     step("servidor", "iniciando...");
-    let status = Command::new("go")
+    let output = Command::new("go")
         .args(["run", "."])
         .current_dir(&dir)
-        .status()
+        .output()
         .unwrap_or_else(|_| die("'go' não encontrado. Instale em https://go.dev/dl/"));
 
-    process::exit(status.code().unwrap_or(1));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let translated = translate_go_errors(&stderr, &dir.join("main.go"), file);
+        eprint!("{}", translated);
+        process::exit(output.status.code().unwrap_or(1));
+    }
+
+    process::exit(output.status.code().unwrap_or(1));
 }
 
 fn cmd_build(args: &[String]) {
@@ -146,18 +153,21 @@ fn cmd_build(args: &[String]) {
     step("compilando", &format!("{stem}..."));
     let start = Instant::now();
     let out_path = env::current_dir().unwrap().join(&stem);
-    let status = Command::new("go")
+    let output = Command::new("go")
         .args(["build", "-o", out_path.to_str().unwrap(), "."])
         .current_dir(&dir)
-        .status()
+        .output()
         .expect("falha ao executar go build");
 
-    if status.success() {
+    if output.status.success() {
         ok(&format!(
             "binário gerado {BOLD}./{stem}{RESET} {DIM}({:.1}s){RESET}",
             start.elapsed().as_secs_f32()
         ));
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let translated = translate_go_errors(&stderr, &dir.join("main.go"), file);
+        eprint!("{}", translated);
         process::exit(1);
     }
 }
@@ -212,7 +222,9 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
     let merged = resolve_imports(program, base_dir, &mut HashSet::new(), file);
     let stdlib = StdlibDeps::from_program(&merged);
 
-    let go_code = Codegen::new()
+    let mut codegen = Codegen::new();
+    codegen.set_source_file(file);
+    let go_code = codegen
         .generate(&merged)
         .unwrap_or_else(|e| die(&format!("{file}: erro de geração: {}", e.message)));
 
@@ -403,4 +415,65 @@ fn require_file<'a>(args: &'a [String]) -> &'a str {
     args.get(2)
         .map(|s| s.as_str())
         .unwrap_or_else(|| die("informe o arquivo: husk run <arquivo.husk>"))
+}
+
+/// Traduz erros do compilador Go (linhas em main.go) de volta para
+/// as linhas do código .husk original usando os source maps embutidos.
+fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String {
+    // Lê o Go gerado e constrói mapa: linha_go → (arquivo_husk, linha_husk)
+    let go_source = match fs::read_to_string(go_file) {
+        Ok(s) => s,
+        Err(_) => return stderr.to_string(),
+    };
+
+    // Mapa: linha Go (1-indexed) → (arquivo husk, linha husk)
+    let mut line_map: std::collections::HashMap<usize, (String, usize)> = std::collections::HashMap::new();
+    for (i, line) in go_source.lines().enumerate() {
+        // procura // husk:arquivo:linha
+        if let Some(rest) = line.trim().strip_prefix("// husk:") {
+            if let Some(sep) = rest.rfind(':') {
+                if let Ok(husk_line) = rest[sep + 1..].parse::<usize>() {
+                    let husk_file_path = rest[..sep].to_string();
+                    line_map.insert(i + 1, (husk_file_path, husk_line));
+                }
+            }
+        }
+    }
+
+    if line_map.is_empty() {
+        return stderr.to_string();
+    }
+
+    let mut result = String::new();
+    for line in stderr.lines() {
+        // Go errors: main.go:LINE:COL: mensagem
+        if let Some(cap) = line.strip_prefix("main.go:") {
+            let parts: Vec<&str> = cap.splitn(2, ':').collect();
+            if parts.len() >= 2 {
+                if let Ok(go_line) = parts[0].parse::<usize>() {
+                    // Procura a anotação mais próxima antes ou na linha atual
+                    let mut best: Option<(String, usize)> = None;
+                    for (&gl, info) in &line_map {
+                        if gl <= go_line {
+                            best = Some((info.0.clone(), info.1));
+                        }
+                    }
+                    if let Some((ref husk_path, husk_line)) = best {
+                        let rest = parts[1..].join(":");
+                        result.push_str(&format!(
+                            "{RED}{BOLD}{}:{}{RESET} {}\n",
+                            husk_path,
+                            husk_line,
+                            rest
+                        ));
+                        continue;
+                    }
+                }
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
 }

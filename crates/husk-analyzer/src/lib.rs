@@ -311,4 +311,34 @@ route GET /hello {
 "#,
         );
     }
+
+    // ---- for...in ----
+
+    #[test]
+    fn test_for_in_lista() {
+        analyze_src_ok(
+            r#"
+fn f(items []string) {
+    for item in items {
+        return item
+    }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_for_in_nao_iteravel() {
+        let errors = analyze_src(
+            r#"
+fn f(x int) {
+    for item in x {
+        return item
+    }
+}
+"#,
+        );
+        assert!(!errors.is_empty());
+        assert!(errors[0].message.contains("lista ou map"));
+    }
 }
