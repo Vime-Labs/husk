@@ -435,12 +435,20 @@ impl Parser {
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
+        // []tipo — lista
+        if matches!(self.current_kind(), TokenKind::LBracket) {
+            self.advance(); // [
+            self.expect(TokenKind::RBracket)?; // ]
+            let inner = self.parse_type()?;
+            return Ok(Type::List(Box::new(inner)));
+        }
         match self.current_kind().clone() {
             TokenKind::TyInt    => { self.advance(); Ok(Type::Int) }
             TokenKind::TyFloat  => { self.advance(); Ok(Type::Float) }
             TokenKind::TyString => { self.advance(); Ok(Type::String) }
             TokenKind::TyBool   => { self.advance(); Ok(Type::Bool) }
             TokenKind::Ident(name) if name == "error" => { self.advance(); Ok(Type::Error) }
+            TokenKind::Ident(name) if name == "map"   => { self.advance(); Ok(Type::Map) }
             TokenKind::Ident(name) => { self.advance(); Ok(Type::Named(name)) }
             _ => Err(ParseError::new(
                 format!("tipo esperado, encontrado {:?}", self.current_kind()),
@@ -487,7 +495,7 @@ impl Parser {
         matches!(
             self.current_kind(),
             TokenKind::TyInt | TokenKind::TyFloat | TokenKind::TyString | TokenKind::TyBool
-                | TokenKind::Ident(_)
+                | TokenKind::Ident(_) | TokenKind::LBracket
         )
     }
 }

@@ -213,5 +213,9 @@ pub enum Type {
     String,
     Bool,
     Error,
+    /// map[string]interface{} — resultado de db.query_one e afins
+    Map,
+    /// []T — resultado de db.query e listas
+    List(Box<Type>),
     Named(String),
 }

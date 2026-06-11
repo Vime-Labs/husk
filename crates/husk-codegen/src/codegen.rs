@@ -501,12 +501,14 @@ fn gen_lit(lit: &Lit) -> String {
 
 fn go_type(ty: &Type) -> String {
     match ty {
-        Type::Int      => "int".into(),
-        Type::Float    => "float64".into(),
-        Type::String   => "string".into(),
-        Type::Bool     => "bool".into(),
-        Type::Error    => "error".into(),
-        Type::Named(n) => n.clone(),
+        Type::Int         => "int".into(),
+        Type::Float       => "float64".into(),
+        Type::String      => "string".into(),
+        Type::Bool        => "bool".into(),
+        Type::Error       => "error".into(),
+        Type::Map         => "map[string]interface{}".into(),
+        Type::List(inner) => format!("[]{}", go_type(inner)),
+        Type::Named(n)    => n.clone(),
     }
 }
 
@@ -622,6 +624,21 @@ route GET /hello {
         assert!(go.contains("type Usuario struct {"));
         assert!(go.contains("Id int"));
         assert!(go.contains("Nome string"));
+    }
+
+    #[test]
+    fn test_tipo_map_e_list() {
+        let go = codegen(r#"
+fn buscar(email string) (map, error) {
+    return nil, nil
+}
+
+fn listar() ([]map, error) {
+    return nil, nil
+}
+"#);
+        assert!(go.contains("func buscar(email string) (map[string]interface{}, error)"));
+        assert!(go.contains("func listar() ([]map[string]interface{}, error)"));
     }
 
     #[test]

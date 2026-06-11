@@ -13,6 +13,28 @@ Husk tem tipagem estática. Os tipos aparecem em parâmetros de função, retorn
 
 ## Tipos compostos
 
+### map
+
+Representa um objeto com chaves string e valores dinâmicos. Gerado como `map[string]interface{}` no Go. Usado principalmente como tipo de retorno de funções que consultam o banco de dados.
+
+```husk
+fn auth_user(email string, senha string) (map, error) {
+    return db.query_one("SELECT id, role FROM users WHERE email = $1", email)
+}
+```
+
+### []tipo
+
+Lista de elementos do mesmo tipo. Gerado como slice Go (`[]T`).
+
+```husk
+fn listar_usuarios() ([]map, error) {
+    return db.query("SELECT id, nome FROM usuarios")
+}
+```
+
+Combinações possíveis: `[]map`, `[]string`, `[]int`, `[]NomeDaStruct`.
+
 ### Struct
 
 Structs agrupam campos nomeados (disponível a partir do v0.3):
