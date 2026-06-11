@@ -86,7 +86,12 @@ impl Codegen {
         for item in &program.items {
             match item {
                 Item::FnDef(f)         => self.scan_block_imports(&f.body, Ctx::Fn),
-                Item::RouteDef(r)      => self.scan_block_imports(&r.body, Ctx::Route),
+                Item::RouteDef(r)      => {
+                    if block_uses_body(&r.body) {
+                        self.go_imports.insert("encoding/json".into());
+                    }
+                    self.scan_block_imports(&r.body, Ctx::Route);
+                }
                 Item::MiddlewareDef(m) => self.scan_block_imports(&m.body, Ctx::Middleware),
                 _ => {}
             }
@@ -248,6 +253,10 @@ impl Codegen {
             "\t{}.{}(\"{}\", func(w http.ResponseWriter, r *http.Request) {{\n",
             router, method, path
         );
+        if block_uses_body(&route.body) {
+            s.push_str("\t\tvar _huskBody map[string]interface{}\n");
+            s.push_str("\t\tjson.NewDecoder(r.Body).Decode(&_huskBody)\n");
+        }
         s.push_str(&self.gen_block(&route.body, Ctx::Route, 2)?);
         s.push_str("\t})\n");
         Ok(s)
@@ -409,6 +418,8 @@ impl Codegen {
 
     fn gen_index(&self, obj: &Expr, idx: &Expr, ctx: Ctx) -> Result<String, CodegenError> {
         // req.headers["X"] → r.Header.Get("X")
+        // req.query["X"]   → r.URL.Query().Get("X")
+        // req.body["X"]    → _huskBody["X"]
         if let Expr::FieldAccess(inner, field) = obj {
             if let Expr::Ident(name) = inner.as_ref() {
                 if name == "req" {
@@ -416,6 +427,7 @@ impl Codegen {
                     return Ok(match field.as_str() {
                         "headers" => format!("r.Header.Get({})", key),
                         "query"   => format!("r.URL.Query().Get({})", key),
+                        "body"    => format!("_huskBody[{}]", key),
                         _         => format!("r.{}[{}]", capitalize(field), key),
                     });
                 }
@@ -517,6 +529,39 @@ fn capitalize(s: &str) -> String {
     match c.next() {
         None    => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
+}
+
+fn block_uses_body(block: &Block) -> bool {
+    block.stmts.iter().any(|s| stmt_uses_body(s))
+}
+
+fn stmt_uses_body(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return(exprs)  => exprs.iter().any(expr_uses_body),
+        Stmt::Let(l)         => expr_uses_body(&l.value),
+        Stmt::LetMulti(l)    => expr_uses_body(&l.value),
+        Stmt::Expr(e)        => expr_uses_body(e),
+        Stmt::If(i)          => block_uses_body(&i.then_block)
+            || i.else_block.as_ref().map_or(false, block_uses_body),
+    }
+}
+
+fn expr_uses_body(expr: &Expr) -> bool {
+    match expr {
+        Expr::Index(obj, _) => {
+            if let Expr::FieldAccess(inner, field) = obj.as_ref() {
+                if let Expr::Ident(name) = inner.as_ref() {
+                    return name == "req" && field == "body";
+                }
+            }
+            false
+        }
+        Expr::Call(c)              => expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body),
+        Expr::FieldAccess(e, _)    => expr_uses_body(e),
+        Expr::BinOp(l, _, r)      => expr_uses_body(l) || expr_uses_body(r),
+        Expr::Unary(_, e)          => expr_uses_body(e),
+        _                          => false,
     }
 }
 
@@ -652,6 +697,22 @@ route GET /secure {
 }
 "#);
         assert!(go.contains("r.Header.Get(\"Authorization\")"));
+    }
+
+    #[test]
+    fn test_req_body() {
+        let go = codegen(r#"
+route POST /login {
+    let email = req.body["email"]
+    let senha = req.body["senha"]
+    return json({ ok: true })
+}
+"#);
+        assert!(go.contains("var _huskBody map[string]interface{}"));
+        assert!(go.contains("json.NewDecoder(r.Body).Decode(&_huskBody)"));
+        assert!(go.contains("_huskBody[\"email\"]"));
+        assert!(go.contains("_huskBody[\"senha\"]"));
+        assert!(go.contains("\"encoding/json\""));
     }
 
     #[test]

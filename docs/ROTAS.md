@@ -107,6 +107,25 @@ route GET /busca {
 }
 ```
 
+### Body (JSON)
+
+Disponível em rotas `POST`, `PUT` e `PATCH`. O body é decodificado automaticamente como JSON quando qualquer campo é acessado.
+
+```husk
+route POST /login {
+    let email = req.body["email"]
+    let senha = req.body["senha"]
+    return json({ ok: true })
+}
+```
+
+O Go gerado decodifica o body uma vez no início do handler:
+
+```go
+var _huskBody map[string]interface{}
+json.NewDecoder(r.Body).Decode(&_huskBody)
+```
+
 ## Middlewares por rota
 
 Aplique um ou mais middlewares declarando-os entre colchetes após o path:
