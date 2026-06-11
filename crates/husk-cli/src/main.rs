@@ -11,8 +11,9 @@ use std::{
     env, fs,
     io::Write,
     path::{Path, PathBuf},
-    process::{self, Command},
-    time::Instant,
+    process::{self, Command, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime},
 };
 
 // Shims da stdlib embutidos no binário
@@ -94,16 +95,22 @@ fn main() {
         Some("run") => cmd_run(&args),
         Some("build") => cmd_build(&args),
         Some("check") => cmd_check(&args),
+        Some("test") => cmd_test(&args),
+        Some("dev") => cmd_dev(&args),
         Some("fmt") => cmd_fmt(&args),
+        Some("add") => cmd_add(&args),
         Some("new") => cmd_new(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
             eprintln!();
             eprintln!("{BOLD}uso:{RESET}");
             eprintln!("  husk run    <arquivo.husk>   transpila e executa");
+            eprintln!("  husk dev    <arquivo.husk>   hot reload (transpila e reinicia ao salvar)");
             eprintln!("  husk build  <arquivo.husk>   gera binário Go");
+            eprintln!("  husk test   [arquivo]         executa testes");
             eprintln!("  husk check  <arquivo.husk>   verifica sintaxe");
             eprintln!("  husk fmt    <arquivo.husk>   formata código");
+            eprintln!("  husk add    <modulo>           adiciona módulo stdlib");
             eprintln!("  husk new    <nome>            cria novo projeto");
             process::exit(1);
         }
@@ -204,13 +211,304 @@ fn cmd_fmt(args: &[String]) {
         ))
     });
 
-    let formatted = formatter::format_program(&program);
+    let formatted = formatter::format_program_with_source(&program, &source);
     fs::write(file, &formatted).unwrap_or_else(|e| die(&format!("erro ao escrever '{file}': {e}")));
 
     ok(&format!(
         "{BOLD}{file}{RESET} formatado {DIM}({:.0}ms){RESET}",
         start.elapsed().as_millis()
     ));
+}
+
+fn cmd_add(args: &[String]) {
+    let module = args.get(2).unwrap_or_else(|| {
+        eprintln!("{RED}erro:{RESET} informe o módulo: husk add <modulo>");
+        eprintln!("  módulos disponíveis: env, postgres, crypto, jwt");
+        process::exit(1);
+    });
+
+    let available = ["env", "postgres", "crypto", "jwt"];
+    if !available.contains(&module.as_str()) {
+        eprintln!(
+            "{RED}erro:{RESET} módulo desconhecido '{module}'",
+        );
+        eprintln!("  disponíveis: env, postgres, crypto, jwt");
+        process::exit(1);
+    }
+
+    // procura o arquivo .husk no diretório atual
+    let cwd = env::current_dir().unwrap();
+    let entries = fs::read_dir(&cwd).unwrap();
+    let husk_file: Option<String> = entries
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            e.path().extension().is_some_and(|ext| ext == "husk")
+                && e.file_type().is_ok_and(|t| t.is_file())
+        })
+        .map(|e| e.path().to_string_lossy().to_string());
+
+    let file = husk_file.unwrap_or_else(|| {
+        die("nenhum arquivo .husk encontrado no diretório atual")
+    });
+
+    let source = fs::read_to_string(&file).unwrap_or_else(|e| die(&format!("erro ao ler '{file}': {e}")));
+
+    let import_line = format!("import \"husk/{module}\" as {module}\n");
+
+    // só adiciona se ainda não existe
+    if source.contains(&import_line) {
+        ok(&format!("'{module}' já está no projeto"));
+        return;
+    }
+
+    let new_source = import_line + &source;
+    fs::write(&file, &new_source).unwrap_or_else(|e| die(&format!("erro ao escrever '{file}': {e}")));
+
+    ok(&format!("{BOLD}{module}{RESET} adicionado a {file}"));
+}
+
+fn cmd_test(args: &[String]) {
+    let start = Instant::now();
+
+    // descobre arquivos de teste
+    let test_files: Vec<(String, String)> = if let Some(file) = args.get(2) {
+        let path = Path::new(file);
+        if path.is_dir() {
+            discover_test_files(path)
+        } else {
+            let source = fs::read_to_string(file).unwrap_or_else(|e| die(&format!("erro ao ler '{file}': {e}")));
+            vec![(file.clone(), source)]
+        }
+    } else {
+        discover_test_files(&env::current_dir().unwrap())
+    };
+
+    if test_files.is_empty() {
+        die("nenhum arquivo _test.husk encontrado");
+    }
+
+    step("testes", &format!("{} arquivo(s)", test_files.len()));
+
+    // transpila cada arquivo e coleta funções test_*
+    let mut test_fns: Vec<(String, String)> = Vec::new(); // (nome, go_code da fn)
+    let mut all_go_code = String::new();
+    let mut stdlib = StdlibDeps { modules: Vec::new() };
+
+    for (file, source) in &test_files {
+        step("  ", file);
+        let base_dir = Path::new(file).parent().unwrap_or(Path::new("."));
+        let program = parse_source(source, file);
+        let mut visited = HashSet::new();
+        let mut processing = HashSet::new();
+        let merged = resolve_imports(program, base_dir, &mut visited, &mut processing, file);
+        stdlib = StdlibDeps::from_program(&merged);
+
+        let mut codegen = Codegen::new();
+        let go = codegen.generate(&merged).unwrap_or_else(|e| die(&format!("{file}: erro de geração: {}", e.message)));
+
+        // extrai funções test_* do Go gerado
+        let test_harness = extract_test_functions(&go, file);
+        test_fns.extend(test_harness);
+        all_go_code.push_str(&go);
+        all_go_code.push('\n');
+    }
+
+    if test_fns.is_empty() {
+        die("nenhuma função test_* encontrada nos arquivos de teste");
+    }
+
+    // gera runner Go
+    let runner = generate_test_runner(&test_fns);
+    all_go_code.push_str(&runner);
+
+    let dir = env::temp_dir().join(format!("husk_test_{}", process::id()));
+    fs::create_dir_all(&dir).expect("falha ao criar diretório temporário");
+
+    write_file(&dir.join("main.go"), &all_go_code);
+    let go_mod = format!(
+        "module husk_test\ngo 1.21\n\nrequire (\n{}\n)\n",
+        stdlib.go_mod_requires()
+    );
+    write_file(&dir.join("go.mod"), &go_mod);
+    stdlib.write_shims(&dir);
+
+    go_mod_tidy(&dir, "test");
+
+    step("executando", "testes...");
+    let output = Command::new("go")
+        .args(["run", "."])
+        .current_dir(&dir)
+        .output()
+        .unwrap_or_else(|_| die("'go' não encontrado"));
+
+    // mostra resultados
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    if !output.stderr.is_empty() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    if output.status.success() {
+        ok(&format!("todos os testes passaram {DIM}({:.1}s){RESET}", start.elapsed().as_secs_f32()));
+    } else {
+        eprintln!("{RED}{} teste(s) falharam{RESET}", test_fns.len());
+        process::exit(1);
+    }
+}
+
+/// Descobre arquivos *_test.husk em um diretório
+fn discover_test_files(dir: &Path) -> Vec<(String, String)> {
+    let mut files = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return files,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "husk")
+            && path
+                .file_stem()
+                .map(|s| s.to_string_lossy().ends_with("_test"))
+                .unwrap_or(false)
+        {
+            if let Ok(source) = fs::read_to_string(&path) {
+                files.push((path.to_string_lossy().to_string(), source));
+            }
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files
+}
+
+/// Extrai funções test_* do Go gerado e retorna (nome, código_go)
+fn extract_test_functions(go_code: &str, _file: &str) -> Vec<(String, String)> {
+    let mut fns = Vec::new();
+    let mut lines = go_code.lines().peekable();
+
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("func test_") {
+            // pega o nome até o (
+            if let Some(name_end) = rest.find('(') {
+                let name = format!("test_{}", &rest[..name_end]);
+                // coleta o corpo da função
+                let mut body = String::from(line);
+                body.push('\n');
+                let opens = line.bytes().filter(|&b| b == b'{').count();
+                let closes = line.bytes().filter(|&b| b == b'}').count();
+                let mut brace_count = opens as isize - closes as isize;
+
+                while brace_count > 0 {
+                    if let Some(next) = lines.next() {
+                        body.push_str(next);
+                        body.push('\n');
+                        let o = next.bytes().filter(|&b| b == b'{').count() as isize;
+                        let c = next.bytes().filter(|&b| b == b'}').count() as isize;
+                        brace_count += o - c;
+                    } else {
+                        break;
+                    }
+                }
+                fns.push((name, body));
+            }
+        }
+    }
+    fns
+}
+
+/// Gera o runner Go que chama as funções test_*
+fn generate_test_runner(test_fns: &[(String, String)]) -> String {
+    let mut out = String::new();
+    out.push_str("func main() {\n");
+    out.push_str("    failed := false\n");
+    out.push_str("    report := func(name string, fn func()) {\n");
+    out.push_str("        defer func() {\n");
+    out.push_str("            if r := recover(); r != nil {\n");
+    out.push_str("                fmt.Printf(\"  FAIL  %s\\n  %v\\n\", name, r)\n");
+    out.push_str("                failed = true\n");
+    out.push_str("            }\n");
+    out.push_str("        }()\n");
+    out.push_str("        fn()\n");
+    out.push_str("        fmt.Printf(\"  PASS  %s\\n\", name)\n");
+    out.push_str("    }\n");
+    out.push('\n');
+
+    // inclui o código das funções test_*
+    for (_, body) in test_fns {
+        out.push_str(body);
+        out.push('\n');
+    }
+
+    // chama cada função test_
+    for (name, _) in test_fns {
+        out.push_str(&format!("    report(\"{}\", {})\n", name, name));
+    }
+
+    out.push('\n');
+    out.push_str("    if failed {\n");
+    out.push_str("        os.Exit(1)\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+    out
+}
+
+fn cmd_dev(args: &[String]) {
+    let file = require_file(args);
+    let file_path = Path::new(file).to_path_buf();
+    let file_stem = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+
+    step("dev", &format!("monitorando {file}..."));
+
+    let mut last_mtime = fs::metadata(&file_path)
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+
+    // transpila e inicia
+    let mut server = start_dev_server(file);
+
+    loop {
+        thread::sleep(Duration::from_millis(500));
+
+        let current_mtime = match fs::metadata(&file_path).and_then(|m| m.modified()) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        if current_mtime == last_mtime {
+            continue;
+        }
+        last_mtime = current_mtime;
+
+        // arquivo mudou — reinicia
+        step("dev", "alteração detectada, reiniciando...");
+        if let Some(ref mut child) = server {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        server = start_dev_server(file);
+    }
+}
+
+fn start_dev_server(file: &str) -> Option<process::Child> {
+    let (go_code, stdlib) = transpile_file(file);
+    let dir = prepare_go_dir(file, &go_code, &stdlib);
+    go_mod_tidy(&dir, file);
+
+    match Command::new("go")
+        .args(["run", "."])
+        .current_dir(&dir)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+    {
+        Ok(child) => {
+            eprintln!("  servidor iniciado (pid {})", child.id());
+            Some(child)
+        }
+        Err(e) => {
+            eprintln!("  {RED}erro:{RESET} falha ao iniciar servidor: {e}");
+            None
+        }
+    }
 }
 
 fn cmd_new(args: &[String]) {
@@ -250,7 +548,9 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
 
     let base_dir = Path::new(file).parent().unwrap_or(Path::new("."));
     let program = parse_source(&source, file);
-    let merged = resolve_imports(program, base_dir, &mut HashSet::new(), file);
+    let mut visited = HashSet::new();
+    let mut processing = HashSet::new();
+    let merged = resolve_imports(program, base_dir, &mut visited, &mut processing, file);
     let stdlib = StdlibDeps::from_program(&merged);
 
     let mut codegen = Codegen::new();
@@ -304,6 +604,7 @@ fn resolve_imports(
     mut program: Program,
     base_dir: &Path,
     visited: &mut HashSet<PathBuf>,
+    processing: &mut HashSet<PathBuf>,
     current_file: &str,
 ) -> Program {
     let imports: Vec<_> = program
@@ -336,7 +637,15 @@ fn resolve_imports(
             ))
         });
 
+        if !processing.insert(canonical.clone()) {
+            die(&format!(
+                "{current_file}: dependência circular detectada — '{}' já está sendo processado",
+                imp.path
+            ));
+        }
+
         if visited.contains(&canonical) {
+            processing.remove(&canonical);
             continue;
         }
         visited.insert(canonical.clone());
@@ -351,7 +660,9 @@ fn resolve_imports(
         let mod_program = parse_source(&source, &canonical.to_string_lossy());
         let mod_dir = canonical.parent().unwrap_or(Path::new("."));
         let mod_program =
-            resolve_imports(mod_program, mod_dir, visited, &canonical.to_string_lossy());
+            resolve_imports(mod_program, mod_dir, visited, processing, &canonical.to_string_lossy());
+
+        processing.remove(&canonical);
 
         for item in mod_program.items {
             match item {

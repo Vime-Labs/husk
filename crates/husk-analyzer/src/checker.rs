@@ -57,6 +57,15 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // assert_eq(expected, actual) — testa igualdade entre dois valores
+        let _ = global.declare(
+            "assert_eq",
+            Symbol::Function(FnSignature {
+                params: vec![],
+                return_types: vec![],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         // erro(msg string) error — cria um valor de erro customizado
         let _ = global.declare(
             "erro",
@@ -575,7 +584,7 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" | "erro" => {
+            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" | "erro" | "assert_eq" => {
                 return Some(TypeInfo::Unknown)
             }
             "string" => return Some(TypeInfo::String),

@@ -23,6 +23,10 @@ impl ParseError {
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
+        let tokens: Vec<Token> = tokens
+            .into_iter()
+            .filter(|t| !matches!(t.kind, husk_lexer::TokenKind::Comment(_)))
+            .collect();
         Self { tokens, pos: 0 }
     }
 

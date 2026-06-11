@@ -31,7 +31,7 @@ impl Lexer {
     }
 
     fn next_token(&mut self) -> Result<Token, LexError> {
-        self.skip_whitespace_and_comments();
+        self.skip_whitespace();
 
         let span = self.span();
 
@@ -43,6 +43,14 @@ impl Lexer {
         }
 
         let ch = self.current();
+
+        // comentário de linha: //
+        if ch == '/' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '/' {
+            return Ok(Token {
+                kind: TokenKind::Comment(self.lex_comment()),
+                span,
+            });
+        }
 
         let kind = match ch {
             '{' => {
@@ -295,31 +303,27 @@ impl Lexer {
         }
     }
 
-    fn skip_whitespace_and_comments(&mut self) {
-        loop {
-            // espaços e quebras de linha
-            while self.pos < self.input.len() && self.current().is_whitespace() {
-                if self.current() == '\n' {
-                    self.line += 1;
-                    self.col = 1;
-                } else {
-                    self.col += 1;
-                }
-                self.pos += 1;
-            }
-
-            // comentários de linha: //
-            if self.pos + 1 < self.input.len()
-                && self.input[self.pos] == '/'
-                && self.input[self.pos + 1] == '/'
-            {
-                while self.pos < self.input.len() && self.current() != '\n' {
-                    self.pos += 1;
-                }
+    fn skip_whitespace(&mut self) {
+        while self.pos < self.input.len() && self.current().is_whitespace() {
+            if self.current() == '\n' {
+                self.line += 1;
+                self.col = 1;
             } else {
-                break;
+                self.col += 1;
             }
+            self.pos += 1;
         }
+    }
+
+    fn lex_comment(&mut self) -> String {
+        self.advance(); // first /
+        self.advance(); // second /
+        let mut content = String::new();
+        while self.pos < self.input.len() && self.current() != '\n' {
+            content.push(self.current());
+            self.advance();
+        }
+        content
     }
 
     fn current(&self) -> char {
@@ -432,7 +436,7 @@ route GET /hello {
     }
 
     #[test]
-    fn test_comment_ignored() {
+    fn test_comment_as_token() {
         let tokens = lex("let x = 1 // isso é um comentário\nlet y = 2");
         assert_eq!(
             tokens,
@@ -441,10 +445,30 @@ route GET /hello {
                 TokenKind::Ident("x".into()),
                 TokenKind::Eq,
                 TokenKind::Int(1),
+                TokenKind::Comment(" isso é um comentário".into()),
                 TokenKind::Let,
                 TokenKind::Ident("y".into()),
                 TokenKind::Eq,
                 TokenKind::Int(2),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_comment_multi_line() {
+        let tokens = lex(
+            "// primeiro\n// segundo\nlet x = 1",
+        );
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Comment(" primeiro".into()),
+                TokenKind::Comment(" segundo".into()),
+                TokenKind::Let,
+                TokenKind::Ident("x".into()),
+                TokenKind::Eq,
+                TokenKind::Int(1),
                 TokenKind::Eof,
             ]
         );

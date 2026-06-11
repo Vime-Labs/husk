@@ -12,6 +12,71 @@ pub fn format_program(program: &Program) -> String {
     out
 }
 
+pub fn format_program_with_source(program: &Program, source: &str) -> String {
+    let mut cursor = CommentCursor::new(source);
+    let mut out = String::new();
+    for (i, item) in program.items.iter().enumerate() {
+        if i > 0 && cursor.peek() != Some(item_start_line(item)) {
+            out.push('\n');
+        }
+        format_item_with_cursor(item, &mut cursor, &mut out, 0);
+        out.push('\n');
+    }
+    cursor.emit_remaining(0, &mut out);
+    out
+}
+
+fn item_start_line(item: &Item) -> usize {
+    match item {
+        Item::FnDef(f) => f.span.line,
+        Item::RouteDef(r) => r.span.line,
+        Item::StructDef(s) => s.span.line,
+        Item::Import(i) => i.span.line,
+        Item::MiddlewareDef(m) => m.span.line,
+        Item::CorsDef(c) => c.span.line,
+    }
+}
+
+struct CommentCursor {
+    lines: Vec<(usize, String)>,
+    idx: usize,
+}
+
+impl CommentCursor {
+    fn new(source: &str) -> Self {
+        let mut lines = Vec::new();
+        for (i, line) in source.lines().enumerate() {
+            let trimmed = line.trim();
+            if let Some(content) = trimmed.strip_prefix("//") {
+                lines.push((i, content.to_string()));
+            }
+        }
+        Self { lines, idx: 0 }
+    }
+
+    fn peek(&self) -> Option<usize> {
+        self.lines.get(self.idx).map(|(line, _)| *line)
+    }
+
+    fn emit_before_line(&mut self, line: usize, indent: usize, out: &mut String) {
+        let ind = indent_str(indent);
+        // line is 1-indexed, internal lines are 0-indexed
+        let target = line.saturating_sub(1);
+        while self.idx < self.lines.len() && self.lines[self.idx].0 < target {
+            out.push_str(&format!("{}//{}\n", ind, self.lines[self.idx].1));
+            self.idx += 1;
+        }
+    }
+
+    fn emit_remaining(&mut self, indent: usize, out: &mut String) {
+        let ind = indent_str(indent);
+        while self.idx < self.lines.len() {
+            out.push_str(&format!("{}//{}\n", ind, self.lines[self.idx].1));
+            self.idx += 1;
+        }
+    }
+}
+
 fn format_item(item: &Item, out: &mut String, indent: usize) {
     match item {
         Item::FnDef(f) => format_fn_def(f, out, indent),
@@ -20,6 +85,35 @@ fn format_item(item: &Item, out: &mut String, indent: usize) {
         Item::Import(i) => format_import(i, out, indent),
         Item::MiddlewareDef(m) => format_middleware_def(m, out, indent),
         Item::CorsDef(c) => format_cors_def(c, out, indent),
+    }
+}
+
+fn format_item_with_cursor(item: &Item, cursor: &mut CommentCursor, out: &mut String, indent: usize) {
+    match item {
+        Item::FnDef(f) => {
+            cursor.emit_before_line(f.span.line, indent, out);
+            format_fn_def(f, out, indent);
+        }
+        Item::RouteDef(r) => {
+            cursor.emit_before_line(r.span.line, indent, out);
+            format_route_def(r, out, indent);
+        }
+        Item::StructDef(s) => {
+            cursor.emit_before_line(s.span.line, indent, out);
+            format_struct_def(s, out, indent);
+        }
+        Item::Import(i) => {
+            cursor.emit_before_line(i.span.line, indent, out);
+            format_import(i, out, indent);
+        }
+        Item::MiddlewareDef(m) => {
+            cursor.emit_before_line(m.span.line, indent, out);
+            format_middleware_def(m, out, indent);
+        }
+        Item::CorsDef(c) => {
+            cursor.emit_before_line(c.span.line, indent, out);
+            format_cors_def(c, out, indent);
+        }
     }
 }
 
@@ -55,7 +149,7 @@ fn format_fn_def(f: &FnDef, out: &mut String, indent: usize) {
         }
     }
     out.push_str(" {\n");
-    format_block(&f.body, out, indent + 1);
+    format_block_with_cursor(&f.body, out, indent + 1);
     out.push_str(&format!("{}}}", i));
 }
 
@@ -76,7 +170,7 @@ fn format_route_def(r: &RouteDef, out: &mut String, indent: usize) {
         out.push_str(&format!(" -> {}", ctx));
     }
     out.push_str(" {\n");
-    format_block(&r.body, out, indent + 1);
+    format_block_with_cursor(&r.body, out, indent + 1);
     out.push_str(&format!("{}}}", i));
 }
 
@@ -87,7 +181,7 @@ fn format_middleware_def(m: &MiddlewareDef, out: &mut String, indent: usize) {
         out.push_str(&format!(" -> {}", ctx));
     }
     out.push_str(" {\n");
-    format_block(&m.body, out, indent + 1);
+    format_block_with_cursor(&m.body, out, indent + 1);
     out.push_str(&format!("{}}}", i));
 }
 
@@ -147,6 +241,13 @@ fn format_cors_def(c: &CorsDef, out: &mut String, indent: usize) {
 }
 
 fn format_block(block: &Block, out: &mut String, indent: usize) {
+    for stmt in &block.stmts {
+        format_stmt(stmt, out, indent);
+        out.push('\n');
+    }
+}
+
+fn format_block_with_cursor(block: &Block, out: &mut String, indent: usize) {
     for stmt in &block.stmts {
         format_stmt(stmt, out, indent);
         out.push('\n');
@@ -387,7 +488,7 @@ fn format_unaryop(op: &UnaryOp, out: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Parser, formatter::format_program};
+    use crate::{Parser, formatter::{format_program, format_program_with_source}};
     use husk_lexer::Lexer;
 
     fn parse(src: &str) -> crate::ast::Program {
@@ -464,6 +565,30 @@ mod tests {
         let src = "fn greeting() {\n    return \"Hello, World!\"\n}\n\nroute GET /hello {\n    return greeting()\n}\n";
         let prog = parse(src);
         let formatted = format_program(&prog);
+        assert_eq!(formatted, src);
+    }
+
+    #[test]
+    fn test_format_comentarios() {
+        let src = "// esta funcao faz algo\nfn hello() {\n    return \"oi\"\n}\n";
+        let prog = parse(src);
+        let formatted = format_program_with_source(&prog, src);
+        assert_eq!(formatted, src);
+    }
+
+    #[test]
+    fn test_format_comentarios_entre_funcoes() {
+        let src = "fn a() {\n    return 1\n}\n\n// separador\nfn b() {\n    return 2\n}\n";
+        let prog = parse(src);
+        let formatted = format_program_with_source(&prog, src);
+        assert_eq!(formatted, src);
+    }
+
+    #[test]
+    fn test_format_sem_comentarios_mantem_igual() {
+        let src = "fn a() {\n    return 1\n}\n\nfn b() {\n    return 2\n}\n";
+        let prog = parse(src);
+        let formatted = format_program_with_source(&prog, src);
         assert_eq!(formatted, src);
     }
 }

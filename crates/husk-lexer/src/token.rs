@@ -82,6 +82,9 @@ pub enum TokenKind {
     And,     // &&
     Or,      // ||
 
+    // Comentários
+    Comment(String),
+
     // Fim de arquivo
     Eof,
 }

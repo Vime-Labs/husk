@@ -270,6 +270,9 @@ impl Codegen {
                 if is_builtin(&call.callee, "erro") {
                     self.go_imports.insert("fmt".into());
                 }
+                if is_builtin(&call.callee, "assert_eq") {
+                    self.go_imports.insert("fmt".into());
+                }
                 if is_builtin(&call.callee, "require_role") {
                     self.go_imports.insert("encoding/json".into());
                 }
@@ -1098,6 +1101,23 @@ impl Codegen {
                 .ok_or_else(|| CodegenError::new("string() requer um argumento"))?;
             let arg_go = self.gen_expr(arg, ctx)?;
             return Ok(format!("fmt.Sprintf(\"%v\", {})", arg_go));
+        }
+
+        // assert_eq(expected, actual) → if expected != actual { panic(...) }
+        if is_builtin(&call.callee, "assert_eq") {
+            let expected = match call.args.first() {
+                Some(e) => self.gen_expr(e, ctx)?,
+                None => return Err(CodegenError::new("assert_eq() espera 2 argumentos")),
+            };
+            let actual = match call.args.get(1) {
+                Some(a) => self.gen_expr(a, ctx)?,
+                None => return Err(CodegenError::new("assert_eq() espera 2 argumentos")),
+            };
+            let check = format!(
+                "func() {{ if {} != {} {{ panic(fmt.Sprintf(\"assert_eq falhou: esperado %v, recebido %v\", {}, {})) }} }}()",
+                expected, actual, expected, actual
+            );
+            return Ok(check);
         }
 
         // erro(msg) → fmt.Errorf(msg)
