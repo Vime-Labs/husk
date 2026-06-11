@@ -845,6 +845,27 @@ route GET /perfil [autenticado] {
     }
 
     #[test]
+    fn test_req_ctx_escrita_e_leitura() {
+        let go = codegen(r#"
+middleware autenticado {
+    set_ctx("user_id", "42")
+    next()
+}
+route GET /perfil [autenticado] {
+    let uid = req.ctx["user_id"]
+    return uid
+}
+"#);
+        // escrita no middleware
+        assert!(go.contains("_huskCtx := context.WithValue(r.Context(), \"user_id\", \"42\")"));
+        assert!(go.contains("r = r.WithContext(_huskCtx)"));
+        // leitura na rota
+        assert!(go.contains("r.Context().Value(\"user_id\")"));
+        // import context adicionado
+        assert!(go.contains("\"context\""));
+    }
+
+    #[test]
     fn test_erro_message() {
         let go = codegen(r#"
 fn f() string {

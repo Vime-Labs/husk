@@ -5,6 +5,10 @@ version = 4
 [[package]]
 name = "husk-analyzer"
 version = "0.1.0"
+dependencies = [
+ "husk-lexer",
+ "husk-parser",
+]
 
 [[package]]
 name = "husk-cli"

@@ -62,13 +62,54 @@ r.With(autenticado, admin).Post("/admin", func(...) {
 })
 ```
 
+## Passando dados para a rota — `set_ctx` e `req.ctx`
+
+Um middleware pode escrever valores no contexto da requisição com `set_ctx("chave", valor)`. As rotas (e middlewares seguintes) leem esses valores com `req.ctx["chave"]`.
+
+```husk
+import "./auth" as auth
+import "husk/env" as env
+
+middleware autenticado {
+    let token = req.headers["Authorization"]
+    if token == "" {
+        return status(401, json({ erro: "token ausente" }))
+    }
+    let claims, err = auth.claims_do_token(token)
+    if err != nil {
+        return status(401, json({ erro: "token inválido" }))
+    }
+    set_ctx("role", claims["role"])
+    set_ctx("user_id", claims["sub"])
+    next()
+}
+```
+
+Na rota, os valores ficam disponíveis via `req.ctx`:
+
+```husk
+route GET /api/auth/users [autenticado] {
+    let role = req.ctx["role"]
+    if role != "master" {
+        return status(403, json({ erro: "acesso negado" }))
+    }
+    let rows, err = auth.listar_usuarios()
+    if err != nil {
+        return status(500, json({ erro: err.message }))
+    }
+    return json({ data: rows })
+}
+```
+
+Isso elimina a necessidade de re-verificar o token em cada rota protegida.
+
 ## Acesso ao `req`
 
 Dentro de um middleware, `req` está disponível da mesma forma que em rotas:
 
 ```husk
 middleware logger {
-    // req.headers, req.query, req.params disponíveis
+    // req.headers, req.query, req.params, req.ctx disponíveis
     next()
 }
 ```
@@ -79,3 +120,4 @@ middleware logger {
 - O nome do middleware deve ser único no arquivo.
 - `next()` sem argumentos passa o controle adiante.
 - Chamar `return` antes de `next()` interrompe a requisição.
+- `set_ctx` só faz sentido antes de `next()` — valores escritos depois não chegam ao handler.
