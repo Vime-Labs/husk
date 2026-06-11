@@ -1,5 +1,5 @@
-use husk_lexer::{Token, TokenKind, Span};
 use crate::ast::*;
+use husk_lexer::{Span, Token, TokenKind};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -14,7 +14,10 @@ pub struct ParseError {
 
 impl ParseError {
     fn new(msg: impl Into<String>, span: Span) -> Self {
-        Self { message: msg.into(), span }
+        Self {
+            message: msg.into(),
+            span,
+        }
     }
 }
 
@@ -33,13 +36,16 @@ impl Parser {
 
     fn parse_item(&mut self) -> Result<Item, ParseError> {
         match self.current_kind() {
-            TokenKind::Fn         => Ok(Item::FnDef(self.parse_fn()?)),
-            TokenKind::Route      => Ok(Item::RouteDef(self.parse_route()?)),
-            TokenKind::Struct     => Ok(Item::StructDef(self.parse_struct()?)),
-            TokenKind::Import     => Ok(Item::Import(self.parse_import()?)),
+            TokenKind::Fn => Ok(Item::FnDef(self.parse_fn()?)),
+            TokenKind::Route => Ok(Item::RouteDef(self.parse_route()?)),
+            TokenKind::Struct => Ok(Item::StructDef(self.parse_struct()?)),
+            TokenKind::Import => Ok(Item::Import(self.parse_import()?)),
             TokenKind::Middleware => Ok(Item::MiddlewareDef(self.parse_middleware()?)),
             _ => Err(ParseError::new(
-                format!("esperado item top-level (fn/route/struct/import/middleware), encontrado {:?}", self.current_kind()),
+                format!(
+                    "esperado item top-level (fn/route/struct/import/middleware), encontrado {:?}",
+                    self.current_kind()
+                ),
                 self.current_span(),
             )),
         }
@@ -55,7 +61,13 @@ impl Parser {
         self.expect(TokenKind::RParen)?;
         let return_type = self.parse_return_type()?;
         let body = self.parse_block()?;
-        Ok(FnDef { name, params, return_type, body, span })
+        Ok(FnDef {
+            name,
+            params,
+            return_type,
+            body,
+            span,
+        })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, ParseError> {
@@ -106,7 +118,10 @@ impl Parser {
         while !matches!(self.current_kind(), TokenKind::RBrace | TokenKind::Eof) {
             let field_name = self.expect_ident()?;
             let ty = self.parse_type()?;
-            fields.push(StructField { name: field_name, ty });
+            fields.push(StructField {
+                name: field_name,
+                ty,
+            });
         }
         self.expect(TokenKind::RBrace)?;
         Ok(StructDef { name, fields, span })
@@ -116,16 +131,29 @@ impl Parser {
         let span = self.current_span();
         self.expect(TokenKind::Import)?;
         let path = match self.current_kind().clone() {
-            TokenKind::Str(s) => { self.advance(); s }
-            _ => return Err(ParseError::new(
-                format!("esperado caminho string após 'import', encontrado {:?}", self.current_kind()),
-                self.current_span(),
-            )),
+            TokenKind::Str(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                return Err(ParseError::new(
+                    format!(
+                        "esperado caminho string após 'import', encontrado {:?}",
+                        self.current_kind()
+                    ),
+                    self.current_span(),
+                ));
+            }
         };
         self.expect(TokenKind::As)?;
         let alias = self.expect_ident()?;
         let is_stdlib = path.starts_with("husk/");
-        Ok(ImportDef { path, alias, is_stdlib, span })
+        Ok(ImportDef {
+            path,
+            alias,
+            is_stdlib,
+            span,
+        })
     }
 
     // middleware nome { corpo }
@@ -143,15 +171,32 @@ impl Parser {
         self.expect(TokenKind::Route)?;
 
         let method = match self.current_kind() {
-            TokenKind::Get    => { self.advance(); HttpMethod::Get }
-            TokenKind::Post   => { self.advance(); HttpMethod::Post }
-            TokenKind::Put    => { self.advance(); HttpMethod::Put }
-            TokenKind::Patch  => { self.advance(); HttpMethod::Patch }
-            TokenKind::Delete => { self.advance(); HttpMethod::Delete }
-            _ => return Err(ParseError::new(
-                format!("esperado método HTTP, encontrado {:?}", self.current_kind()),
-                self.current_span(),
-            )),
+            TokenKind::Get => {
+                self.advance();
+                HttpMethod::Get
+            }
+            TokenKind::Post => {
+                self.advance();
+                HttpMethod::Post
+            }
+            TokenKind::Put => {
+                self.advance();
+                HttpMethod::Put
+            }
+            TokenKind::Patch => {
+                self.advance();
+                HttpMethod::Patch
+            }
+            TokenKind::Delete => {
+                self.advance();
+                HttpMethod::Delete
+            }
+            _ => {
+                return Err(ParseError::new(
+                    format!("esperado método HTTP, encontrado {:?}", self.current_kind()),
+                    self.current_span(),
+                ));
+            }
         };
 
         let path = self.parse_route_path()?;
@@ -173,19 +218,38 @@ impl Parser {
         };
 
         let body = self.parse_block()?;
-        Ok(RouteDef { method, path, middlewares, body, span })
+        Ok(RouteDef {
+            method,
+            path,
+            middlewares,
+            body,
+            span,
+        })
     }
 
     fn parse_route_path(&mut self) -> Result<RoutePath, ParseError> {
         let mut segments = Vec::new();
         loop {
-            if !matches!(self.current_kind(), TokenKind::Slash) { break; }
+            if !matches!(self.current_kind(), TokenKind::Slash) {
+                break;
+            }
             self.advance();
             match self.current_kind().clone() {
                 TokenKind::LBrace | TokenKind::LBracket | TokenKind::Eof => break,
-                TokenKind::Ident(name) => { self.advance(); segments.push(PathSegment::Literal(name)); }
-                TokenKind::Colon => { self.advance(); let n = self.expect_ident()?; segments.push(PathSegment::Param(n)); }
-                TokenKind::Int(n) => { let lit = n.to_string(); self.advance(); segments.push(PathSegment::Literal(lit)); }
+                TokenKind::Ident(name) => {
+                    self.advance();
+                    segments.push(PathSegment::Literal(name));
+                }
+                TokenKind::Colon => {
+                    self.advance();
+                    let n = self.expect_ident()?;
+                    segments.push(PathSegment::Param(n));
+                }
+                TokenKind::Int(n) => {
+                    let lit = n.to_string();
+                    self.advance();
+                    segments.push(PathSegment::Literal(lit));
+                }
                 _ => break,
             }
         }
@@ -214,7 +278,7 @@ impl Parser {
                 Ok(Stmt::Return(exprs))
             }
             TokenKind::Let => self.parse_let(),
-            TokenKind::If  => Ok(Stmt::If(self.parse_if()?)),
+            TokenKind::If => Ok(Stmt::If(self.parse_if()?)),
             _ => Ok(Stmt::Expr(self.parse_expr()?)),
         }
     }
@@ -229,7 +293,9 @@ impl Parser {
             let mut names = vec![first];
             loop {
                 names.push(self.expect_ident()?);
-                if !matches!(self.current_kind(), TokenKind::Comma) { break; }
+                if !matches!(self.current_kind(), TokenKind::Comma) {
+                    break;
+                }
                 self.advance();
             }
             self.expect(TokenKind::Eq)?;
@@ -238,10 +304,18 @@ impl Parser {
         }
 
         // let nome tipo = expr  ou  let nome = expr
-        let ty = if self.current_is_type() { Some(self.parse_type()?) } else { None };
+        let ty = if self.current_is_type() {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
         self.expect(TokenKind::Eq)?;
         let value = self.parse_expr()?;
-        Ok(Stmt::Let(LetStmt { name: first, ty, value }))
+        Ok(Stmt::Let(LetStmt {
+            name: first,
+            ty,
+            value,
+        }))
     }
 
     fn parse_if(&mut self) -> Result<IfStmt, ParseError> {
@@ -254,10 +328,16 @@ impl Parser {
         } else {
             None
         };
-        Ok(IfStmt { condition, then_block, else_block })
+        Ok(IfStmt {
+            condition,
+            then_block,
+            else_block,
+        })
     }
 
-    fn parse_expr(&mut self) -> Result<Expr, ParseError> { self.parse_or() }
+    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
+        self.parse_or()
+    }
 
     fn parse_or(&mut self) -> Result<Expr, ParseError> {
         let mut left = self.parse_and()?;
@@ -283,7 +363,7 @@ impl Parser {
         let mut left = self.parse_comparison()?;
         loop {
             let op = match self.current_kind() {
-                TokenKind::EqEq  => BinOp::Eq,
+                TokenKind::EqEq => BinOp::Eq,
                 TokenKind::NotEq => BinOp::NotEq,
                 _ => break,
             };
@@ -297,8 +377,8 @@ impl Parser {
         let mut left = self.parse_additive()?;
         loop {
             let op = match self.current_kind() {
-                TokenKind::Lt   => BinOp::Lt,
-                TokenKind::Gt   => BinOp::Gt,
+                TokenKind::Lt => BinOp::Lt,
+                TokenKind::Gt => BinOp::Gt,
                 TokenKind::LtEq => BinOp::LtEq,
                 TokenKind::GtEq => BinOp::GtEq,
                 _ => break,
@@ -313,7 +393,7 @@ impl Parser {
         let mut left = self.parse_multiplicative()?;
         loop {
             let op = match self.current_kind() {
-                TokenKind::Plus  => BinOp::Add,
+                TokenKind::Plus => BinOp::Add,
                 TokenKind::Minus => BinOp::Sub,
                 _ => break,
             };
@@ -327,8 +407,8 @@ impl Parser {
         let mut left = self.parse_unary()?;
         loop {
             let op = match self.current_kind() {
-                TokenKind::Star    => BinOp::Mul,
-                TokenKind::Slash   => BinOp::Div,
+                TokenKind::Star => BinOp::Mul,
+                TokenKind::Slash => BinOp::Div,
                 TokenKind::Percent => BinOp::Mod,
                 _ => break,
             };
@@ -340,8 +420,14 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, ParseError> {
         match self.current_kind() {
-            TokenKind::Bang  => { self.advance(); Ok(Expr::Unary(UnaryOp::Not, Box::new(self.parse_unary()?))) }
-            TokenKind::Minus => { self.advance(); Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.parse_unary()?))) }
+            TokenKind::Bang => {
+                self.advance();
+                Ok(Expr::Unary(UnaryOp::Not, Box::new(self.parse_unary()?)))
+            }
+            TokenKind::Minus => {
+                self.advance();
+                Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.parse_unary()?)))
+            }
             _ => self.parse_postfix(),
         }
     }
@@ -354,7 +440,10 @@ impl Parser {
                     self.advance();
                     let args = self.parse_args()?;
                     self.expect(TokenKind::RParen)?;
-                    expr = Expr::Call(CallExpr { callee: Box::new(expr), args });
+                    expr = Expr::Call(CallExpr {
+                        callee: Box::new(expr),
+                        args,
+                    });
                 }
                 TokenKind::Dot => {
                     self.advance();
@@ -369,11 +458,15 @@ impl Parser {
                 }
                 TokenKind::LBrace => {
                     if let Expr::Ident(name) = &expr {
-                        let name = name.clone();
-                        self.advance();
-                        let fields = self.parse_field_list()?;
-                        self.expect(TokenKind::RBrace)?;
-                        expr = Expr::StructInit(StructInit { name, fields });
+                        if self.lookahead_is_struct_init() {
+                            let name = name.clone();
+                            self.advance(); // consome {
+                            let fields = self.parse_field_list()?;
+                            self.expect(TokenKind::RBrace)?;
+                            expr = Expr::StructInit(StructInit { name, fields });
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -388,21 +481,44 @@ impl Parser {
         let mut args = Vec::new();
         while !matches!(self.current_kind(), TokenKind::RParen | TokenKind::Eof) {
             args.push(self.parse_expr()?);
-            if matches!(self.current_kind(), TokenKind::Comma) { self.advance(); }
+            if matches!(self.current_kind(), TokenKind::Comma) {
+                self.advance();
+            }
         }
         Ok(args)
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
         match self.current_kind().clone() {
-            TokenKind::Int(n)   => { self.advance(); Ok(Expr::Lit(Lit::Int(n))) }
-            TokenKind::Float(f) => { self.advance(); Ok(Expr::Lit(Lit::Float(f))) }
-            TokenKind::Str(s)   => { self.advance(); Ok(Expr::Lit(Lit::Str(s))) }
-            TokenKind::Bool(b)  => { self.advance(); Ok(Expr::Lit(Lit::Bool(b))) }
-            TokenKind::Nil      => { self.advance(); Ok(Expr::Nil) }
+            TokenKind::Int(n) => {
+                self.advance();
+                Ok(Expr::Lit(Lit::Int(n)))
+            }
+            TokenKind::Float(f) => {
+                self.advance();
+                Ok(Expr::Lit(Lit::Float(f)))
+            }
+            TokenKind::Str(s) => {
+                self.advance();
+                Ok(Expr::Lit(Lit::Str(s)))
+            }
+            TokenKind::Bool(b) => {
+                self.advance();
+                Ok(Expr::Lit(Lit::Bool(b)))
+            }
+            TokenKind::Nil => {
+                self.advance();
+                Ok(Expr::Nil)
+            }
             // next é keyword mas usado como expressão dentro de middleware
-            TokenKind::Next     => { self.advance(); Ok(Expr::Ident("next".into())) }
-            TokenKind::Ident(name) => { self.advance(); Ok(Expr::Ident(name)) }
+            TokenKind::Next => {
+                self.advance();
+                Ok(Expr::Ident("next".into()))
+            }
+            TokenKind::Ident(name) => {
+                self.advance();
+                Ok(Expr::Ident(name))
+            }
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -429,7 +545,9 @@ impl Parser {
             self.expect(TokenKind::Colon)?;
             let val = self.parse_expr()?;
             fields.push((key, val));
-            if matches!(self.current_kind(), TokenKind::Comma) { self.advance(); }
+            if matches!(self.current_kind(), TokenKind::Comma) {
+                self.advance();
+            }
         }
         Ok(fields)
     }
@@ -443,13 +561,34 @@ impl Parser {
             return Ok(Type::List(Box::new(inner)));
         }
         match self.current_kind().clone() {
-            TokenKind::TyInt    => { self.advance(); Ok(Type::Int) }
-            TokenKind::TyFloat  => { self.advance(); Ok(Type::Float) }
-            TokenKind::TyString => { self.advance(); Ok(Type::String) }
-            TokenKind::TyBool   => { self.advance(); Ok(Type::Bool) }
-            TokenKind::Ident(name) if name == "error" => { self.advance(); Ok(Type::Error) }
-            TokenKind::Ident(name) if name == "map"   => { self.advance(); Ok(Type::Map) }
-            TokenKind::Ident(name) => { self.advance(); Ok(Type::Named(name)) }
+            TokenKind::TyInt => {
+                self.advance();
+                Ok(Type::Int)
+            }
+            TokenKind::TyFloat => {
+                self.advance();
+                Ok(Type::Float)
+            }
+            TokenKind::TyString => {
+                self.advance();
+                Ok(Type::String)
+            }
+            TokenKind::TyBool => {
+                self.advance();
+                Ok(Type::Bool)
+            }
+            TokenKind::Ident(name) if name == "error" => {
+                self.advance();
+                Ok(Type::Error)
+            }
+            TokenKind::Ident(name) if name == "map" => {
+                self.advance();
+                Ok(Type::Map)
+            }
+            TokenKind::Ident(name) => {
+                self.advance();
+                Ok(Type::Named(name))
+            }
             _ => Err(ParseError::new(
                 format!("tipo esperado, encontrado {:?}", self.current_kind()),
                 self.current_span(),
@@ -459,12 +598,20 @@ impl Parser {
 
     // --- helpers ---
 
-    fn current_kind(&self) -> &TokenKind { &self.tokens[self.pos].kind }
-    fn current_span(&self) -> Span { self.tokens[self.pos].span.clone() }
-    fn at_eof(&self) -> bool { matches!(self.current_kind(), TokenKind::Eof) }
+    fn current_kind(&self) -> &TokenKind {
+        &self.tokens[self.pos].kind
+    }
+    fn current_span(&self) -> Span {
+        self.tokens[self.pos].span.clone()
+    }
+    fn at_eof(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Eof)
+    }
 
     fn advance(&mut self) {
-        if !self.at_eof() { self.pos += 1; }
+        if !self.at_eof() {
+            self.pos += 1;
+        }
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<(), ParseError> {
@@ -485,7 +632,10 @@ impl Parser {
             Ok(name)
         } else {
             Err(ParseError::new(
-                format!("esperado identificador, encontrado {:?}", self.current_kind()),
+                format!(
+                    "esperado identificador, encontrado {:?}",
+                    self.current_kind()
+                ),
                 self.current_span(),
             ))
         }
@@ -494,8 +644,47 @@ impl Parser {
     fn current_is_type(&self) -> bool {
         matches!(
             self.current_kind(),
-            TokenKind::TyInt | TokenKind::TyFloat | TokenKind::TyString | TokenKind::TyBool
-                | TokenKind::Ident(_) | TokenKind::LBracket
+            TokenKind::TyInt
+                | TokenKind::TyFloat
+                | TokenKind::TyString
+                | TokenKind::TyBool
+                | TokenKind::Ident(_)
+                | TokenKind::LBracket
         )
+    }
+
+    /// Lookahead: token no índice `pos + offset` sem avançar
+    fn peek(&self, offset: usize) -> &TokenKind {
+        let idx = self.pos + offset;
+        if idx < self.tokens.len() {
+            &self.tokens[idx].kind
+        } else {
+            &TokenKind::Eof
+        }
+    }
+
+    /// Verifica se o `{` atual é início de inicialização de struct
+    /// (evita conflito com bloco de if/else/for/rota)
+    /// Só é struct init se depois de `{` vier:
+    ///   - `ident:` (campo nomeado)
+    ///   - `}` (struct vazio)
+    fn lookahead_is_struct_init(&self) -> bool {
+        debug_assert!(matches!(self.current_kind(), TokenKind::LBrace));
+
+        let after_lbrace = self.peek(1);
+
+        // StructName {} — struct vazio
+        if matches!(after_lbrace, TokenKind::RBrace) {
+            return true;
+        }
+
+        // StructName { campo: valor, ... }
+        if let TokenKind::Ident(_) = after_lbrace {
+            if matches!(self.peek(2), TokenKind::Colon) {
+                return true;
+            }
+        }
+
+        false
     }
 }
