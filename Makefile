@@ -2,19 +2,23 @@
 
 all: build
 
+## Compila todos os crates em modo release
 build:
 	cargo build --release
 
+## Executa todos os testes do workspace
 test:
 	cargo test
 
+## Verifica se o código compila (mais rápido que build)
 check:
 	cargo check
 
+## Limpa artefatos de compilação
 clean:
 	cargo clean
 
-## Instala o binário husk globalmente via cargo install
+## Instala o binário husk globalmente (~/.cargo/bin/husk)
 install:
 	cargo install --path crates/husk-cli --force
 
@@ -33,3 +37,11 @@ bump-version:
 	@echo ""
 	@echo "Versão atualizada para $(VERSION). Execute 'make build' para compilar."
 	@echo "Depois 'make install' para instalar o binário globalmente."
+
+## Mostra a versão atual de cada crate
+version:
+	@for toml in crates/*/Cargo.toml; do \
+		crate=$$(basename $$(dirname $$toml)); \
+		ver=$$(grep "^version" $$toml | sed 's/version = "\(.*\)"/\1/'); \
+		echo "  $$crate: $$ver"; \
+	done
