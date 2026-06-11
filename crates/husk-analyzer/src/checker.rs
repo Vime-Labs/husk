@@ -57,6 +57,15 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // erro(msg string) error — cria um valor de erro customizado
+        let _ = global.declare(
+            "erro",
+            Symbol::Function(FnSignature {
+                params: vec![("msg".into(), TypeInfo::String)],
+                return_types: vec![TypeInfo::Error],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         // require_role(actual, expected, [msg]) — compara valor com role esperada
         let _ = global.declare(
             "require_role",
@@ -566,7 +575,7 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" => {
+            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" | "erro" => {
                 return Some(TypeInfo::Unknown)
             }
             "string" => return Some(TypeInfo::String),

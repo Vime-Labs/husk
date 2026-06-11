@@ -312,6 +312,22 @@ route GET /hello {
         );
     }
 
+    // ---- erro() ----
+
+    #[test]
+    fn test_erro_function() {
+        analyze_src_ok(
+            r#"
+fn buscar(id int) (string, error) {
+    if id == 0 {
+        return "", erro("id inválido")
+    }
+    return "ok", nil
+}
+"#,
+        );
+    }
+
     // ---- type conversions ----
 
     #[test]

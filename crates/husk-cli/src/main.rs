@@ -4,6 +4,7 @@ use husk_lexer::Lexer;
 use husk_parser::{
     Parser,
     ast::{Item, Program},
+    formatter,
 };
 use std::{
     collections::HashSet,
@@ -93,6 +94,7 @@ fn main() {
         Some("run") => cmd_run(&args),
         Some("build") => cmd_build(&args),
         Some("check") => cmd_check(&args),
+        Some("fmt") => cmd_fmt(&args),
         Some("new") => cmd_new(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
@@ -101,6 +103,7 @@ fn main() {
             eprintln!("  husk run    <arquivo.husk>   transpila e executa");
             eprintln!("  husk build  <arquivo.husk>   gera binário Go");
             eprintln!("  husk check  <arquivo.husk>   verifica sintaxe");
+            eprintln!("  husk fmt    <arquivo.husk>   formata código");
             eprintln!("  husk new    <nome>            cria novo projeto");
             process::exit(1);
         }
@@ -121,20 +124,15 @@ fn cmd_run(args: &[String]) {
     ));
 
     step("servidor", "iniciando...");
-    let output = Command::new("go")
+    // Usa status() em vez de output() para que stdout/stderr do Go
+    // vá direto para o terminal (servidor web nunca termina sozinho).
+    let status = Command::new("go")
         .args(["run", "."])
         .current_dir(&dir)
-        .output()
+        .status()
         .unwrap_or_else(|_| die("'go' não encontrado. Instale em https://go.dev/dl/"));
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let translated = translate_go_errors(&stderr, &dir.join("main.go"), file);
-        eprint!("{}", translated);
-        process::exit(output.status.code().unwrap_or(1));
-    }
-
-    process::exit(output.status.code().unwrap_or(1));
+    process::exit(status.code().unwrap_or(1));
 }
 
 fn cmd_build(args: &[String]) {
@@ -178,6 +176,39 @@ fn cmd_check(args: &[String]) {
     transpile_file(file); // check: só valida sintaxe/codegen, descarta saída
     ok(&format!(
         "{BOLD}{file}{RESET} {DIM}({:.0}ms){RESET}",
+        start.elapsed().as_millis()
+    ));
+}
+
+fn cmd_fmt(args: &[String]) {
+    let file = require_file(args);
+    let start = Instant::now();
+
+    let source =
+        fs::read_to_string(file).unwrap_or_else(|e| die(&format!("erro ao ler '{file}': {e}")));
+
+    let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
+        die(&format!(
+            "{}:{}: erro léxico: {}",
+            file,
+            format_span(e.span.line, e.span.col),
+            e.message
+        ))
+    });
+    let program = Parser::new(tokens).parse().unwrap_or_else(|e| {
+        die(&format!(
+            "{}:{}: erro de sintaxe: {}",
+            file,
+            format_span(e.span.line, e.span.col),
+            e.message
+        ))
+    });
+
+    let formatted = formatter::format_program(&program);
+    fs::write(file, &formatted).unwrap_or_else(|e| die(&format!("erro ao escrever '{file}': {e}")));
+
+    ok(&format!(
+        "{BOLD}{file}{RESET} formatado {DIM}({:.0}ms){RESET}",
         start.elapsed().as_millis()
     ));
 }
@@ -427,7 +458,8 @@ fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String
     };
 
     // Mapa: linha Go (1-indexed) → (arquivo husk, linha husk)
-    let mut line_map: std::collections::HashMap<usize, (String, usize)> = std::collections::HashMap::new();
+    let mut line_map: std::collections::HashMap<usize, (String, usize)> =
+        std::collections::HashMap::new();
     for (i, line) in go_source.lines().enumerate() {
         // procura // husk:arquivo:linha
         if let Some(rest) = line.trim().strip_prefix("// husk:") {
@@ -462,9 +494,7 @@ fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String
                         let rest = parts[1..].join(":");
                         result.push_str(&format!(
                             "{RED}{BOLD}{}:{}{RESET} {}\n",
-                            husk_path,
-                            husk_line,
-                            rest
+                            husk_path, husk_line, rest
                         ));
                         continue;
                     }

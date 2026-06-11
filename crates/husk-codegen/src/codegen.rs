@@ -177,12 +177,9 @@ impl Codegen {
             }
         }
 
-        // .env loading usa os e strings
-        let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
-        if has_routes {
-            self.go_imports.insert("os".into());
-            self.go_imports.insert("strings".into());
-        }
+        // .env loading no main() sempre usa os e strings
+        self.go_imports.insert("os".into());
+        self.go_imports.insert("strings".into());
     }
 
     fn scan_block_imports(&mut self, block: &Block, ctx: Ctx) {
@@ -268,6 +265,9 @@ impl Codegen {
                     self.go_imports.insert("strconv".into());
                 }
                 if is_builtin(&call.callee, "string") {
+                    self.go_imports.insert("fmt".into());
+                }
+                if is_builtin(&call.callee, "erro") {
                     self.go_imports.insert("fmt".into());
                 }
                 if is_builtin(&call.callee, "require_role") {
@@ -440,9 +440,21 @@ impl Codegen {
             "Content-Type".to_string(),
         ];
 
-        let origins = if c.origins.is_empty() { &default_origins } else { &c.origins };
-        let methods = if c.methods.is_empty() { &default_methods } else { &c.methods };
-        let headers = if c.headers.is_empty() { &default_headers } else { &c.headers };
+        let origins = if c.origins.is_empty() {
+            &default_origins
+        } else {
+            &c.origins
+        };
+        let methods = if c.methods.is_empty() {
+            &default_methods
+        } else {
+            &c.methods
+        };
+        let headers = if c.headers.is_empty() {
+            &default_headers
+        } else {
+            &c.headers
+        };
 
         let fmt_slice = |v: &Vec<String>| -> String {
             let items: Vec<String> = v.iter().map(|s| format!("\"{}\"", s)).collect();
@@ -1088,6 +1100,16 @@ impl Codegen {
             return Ok(format!("fmt.Sprintf(\"%v\", {})", arg_go));
         }
 
+        // erro(msg) → fmt.Errorf(msg)
+        if is_builtin(&call.callee, "erro") {
+            let arg = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("erro() requer uma mensagem"))?;
+            let arg_go = self.gen_expr(arg, ctx)?;
+            return Ok(format!("fmt.Errorf({})", arg_go));
+        }
+
         // require_role(actual_value, expected_role) ou require_role(actual_value, expected_role, "mensagem")
         // Compara o valor real com o esperado: se diferente, 403
         // Ex: require_role(ctx.role, "master")
@@ -1441,9 +1463,7 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
         Stmt::Let(l) => expr_uses_body(&l.value),
         Stmt::LetMulti(l) => expr_uses_body(&l.value),
         Stmt::Expr(e) => expr_uses_body(e),
-        Stmt::ForIn(f) => {
-            expr_uses_body(&f.collection) || block_uses_body(&f.body)
-        }
+        Stmt::ForIn(f) => expr_uses_body(&f.collection) || block_uses_body(&f.body),
         Stmt::If(i) => {
             block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
         }
@@ -2170,7 +2190,9 @@ route GET /list {
     fn test_source_map_fn() {
         let mut cg = Codegen::new();
         cg.set_source_file("app.husk");
-        let tokens = Lexer::new("fn saudacao() string {\n    return \"oi\"\n}").tokenize().unwrap();
+        let tokens = Lexer::new("fn saudacao() string {\n    return \"oi\"\n}")
+            .tokenize()
+            .unwrap();
         let program = Parser::new(tokens).parse().unwrap();
         let go = cg.generate(&program).unwrap();
         assert!(go.contains("// husk:app.husk:1"));
@@ -2180,10 +2202,14 @@ route GET /list {
     fn test_source_map_route() {
         let mut cg = Codegen::new();
         cg.set_source_file("router.husk");
-        let tokens = Lexer::new(r#"route GET /ping {
+        let tokens = Lexer::new(
+            r#"route GET /ping {
     return "ok"
 }
-"#).tokenize().unwrap();
+"#,
+        )
+        .tokenize()
+        .unwrap();
         let program = Parser::new(tokens).parse().unwrap();
         let go = cg.generate(&program).unwrap();
         assert!(go.contains("// husk:router.husk:1"));
@@ -2193,13 +2219,32 @@ route GET /list {
     fn test_source_map_middleware() {
         let mut cg = Codegen::new();
         cg.set_source_file("auth.husk");
-        let tokens = Lexer::new(r#"middleware auth {
+        let tokens = Lexer::new(
+            r#"middleware auth {
     next()
 }
-"#).tokenize().unwrap();
+"#,
+        )
+        .tokenize()
+        .unwrap();
         let program = Parser::new(tokens).parse().unwrap();
         let go = cg.generate(&program).unwrap();
         assert!(go.contains("// husk:auth.husk:1"));
+    }
+
+    // ---- erro() ----
+
+    #[test]
+    fn test_erro_builtin() {
+        let go = codegen(
+            r#"
+fn f() (string, error) {
+    return "", erro("deu ruim")
+}
+"#,
+        );
+        assert!(go.contains("fmt.Errorf(\"deu ruim\")"));
+        assert!(go.contains("\"fmt\""));
     }
 
     // ---- type conversion built-ins ----
@@ -2272,7 +2317,11 @@ route GET /ping {
         assert!(go.contains("r.Use(cors.Handler(cors.Options{"));
         assert!(go.contains("AllowedOrigins: []string{\"*\"}"));
         assert!(go.contains("AllowedMethods: []string{\"GET\", \"POST\", \"PUT\", \"PATCH\", \"DELETE\", \"OPTIONS\"}"));
-        assert!(go.contains("AllowedHeaders: []string{\"Accept\", \"Authorization\", \"Content-Type\"}"));
+        assert!(
+            go.contains(
+                "AllowedHeaders: []string{\"Accept\", \"Authorization\", \"Content-Type\"}"
+            )
+        );
         assert!(go.contains("AllowCredentials: false"));
         assert!(go.contains("MaxAge: 300"));
     }
@@ -2292,7 +2341,9 @@ route GET /ping {
 }
 "#,
         );
-        assert!(go.contains("AllowedOrigins: []string{\"https://app.vime.com.br\", \"http://localhost:3000\"}"));
+        assert!(go.contains(
+            "AllowedOrigins: []string{\"https://app.vime.com.br\", \"http://localhost:3000\"}"
+        ));
         assert!(go.contains("AllowedMethods: []string{\"GET\", \"POST\"}"));
         assert!(go.contains("AllowedHeaders: []string{\"Content-Type\", \"Authorization\"}"));
     }
@@ -2312,6 +2363,9 @@ route GET /ping {
         );
         let cors_pos = go.find("r.Use(cors.Handler").unwrap();
         let route_pos = go.find("r.Get(").unwrap();
-        assert!(cors_pos < route_pos, "cors.Use deve aparecer antes das rotas");
+        assert!(
+            cors_pos < route_pos,
+            "cors.Use deve aparecer antes das rotas"
+        );
     }
 }
