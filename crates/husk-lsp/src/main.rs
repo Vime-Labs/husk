@@ -2,9 +2,9 @@ use husk_lexer::Lexer;
 use husk_parser::Parser;
 use lsp_server::{Connection, Message, Notification, Request, Response};
 use lsp_types::{
-    Diagnostic, DiagnosticSeverity, InitializeParams, NumberOrString, Position,
-    PublishDiagnosticsParams, Range, ServerCapabilities, TextDocumentSyncKind,
-    TextDocumentSyncCapability, Url, notification::Notification as _, request::Request as _,
+    Diagnostic, DiagnosticSeverity, InitializeParams, Position, PublishDiagnosticsParams, Range,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Uri,
+    notification::Notification as _, request::Request as _,
 };
 use std::collections::HashMap;
 use std::error::Error;
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
 
     let capabilities = ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::Full)),
+        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         ..Default::default()
     };
 
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 }
 
 struct ServerState {
-    documents: HashMap<Url, String>,
+    documents: HashMap<Uri, String>,
 }
 
 fn main_loop(connection: &Connection, state: &mut ServerState) -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -106,7 +106,7 @@ fn handle_notification(
 fn publish_diagnostics(
     connection: &Connection,
     state: &ServerState,
-    uri: &Url,
+    uri: &Uri,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let source = match state.documents.get(uri) {
         Some(s) => s.clone(),

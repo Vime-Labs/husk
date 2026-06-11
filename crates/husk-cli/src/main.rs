@@ -95,6 +95,7 @@ fn main() {
         Some("run") => cmd_run(&args),
         Some("build") => cmd_build(&args),
         Some("check") => cmd_check(&args),
+        Some("lsp") => cmd_lsp(),
         Some("test") => cmd_test(&args),
         Some("dev") => cmd_dev(&args),
         Some("fmt") => cmd_fmt(&args),
@@ -104,6 +105,7 @@ fn main() {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
             eprintln!();
             eprintln!("{BOLD}uso:{RESET}");
+            eprintln!("  husk lsp                      inicia servidor LSP");
             eprintln!("  husk run    <arquivo.husk>   transpila e executa");
             eprintln!("  husk dev    <arquivo.husk>   hot reload (transpila e reinicia ao salvar)");
             eprintln!("  husk build  <arquivo.husk>   gera binário Go");
@@ -265,6 +267,25 @@ fn cmd_add(args: &[String]) {
     fs::write(&file, &new_source).unwrap_or_else(|e| die(&format!("erro ao escrever '{file}': {e}")));
 
     ok(&format!("{BOLD}{module}{RESET} adicionado a {file}"));
+}
+
+fn cmd_lsp() {
+    let bin = env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("husk-lsp");
+    if !bin.exists() {
+        die("binário husk-lsp não encontrado. Compile com: cargo build -p husk-lsp");
+    }
+    let mut output = Command::new(&bin)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|e| die(&format!("falha ao iniciar husk-lsp: {e}")));
+    let status = output.wait().unwrap_or_else(|e| die(&format!("erro no husk-lsp: {e}")));
+    process::exit(status.code().unwrap_or(1));
 }
 
 fn cmd_test(args: &[String]) {
