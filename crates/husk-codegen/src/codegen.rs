@@ -150,6 +150,7 @@ impl Codegen {
                 }
             }
             Expr::Call(call) if is_builtin(&call.callee, "status") => {
+                self.go_imports.insert("encoding/json".into());
                 if let Some(body) = call.args.get(1) {
                     self.scan_route_return_imports(body);
                 }
@@ -432,6 +433,13 @@ impl Codegen {
                     s.push_str(&self.gen_route_response(body)?);
                 }
                 Ok(s)
+            }
+            Expr::MapLit(m) => {
+                // Objeto literal em resposta de rota → JSON automático
+                Ok(format!(
+                    "w.Header().Set(\"Content-Type\", \"application/json\")\njson.NewEncoder(w).Encode({})",
+                    self.gen_map_lit(m, Ctx::Route)?
+                ))
             }
             other => Ok(format!(
                 "fmt.Fprint(w, {})",
@@ -1157,5 +1165,34 @@ route GET /user/:id {
         );
         assert!(go.contains("w.WriteHeader(400)"));
         assert!(go.contains("\"erro\": \"Usuário não encontrado\""));
+    }
+
+    #[test]
+    fn test_status_com_map_lit_implica_json() {
+        // return status(401, { erro: "x" })  → JSON automático, sem json() explícito
+        let go = codegen(
+            r#"
+route GET /secure {
+    return status(401, { erro: "não autorizado" })
+}
+"#,
+        );
+        assert!(go.contains("w.WriteHeader(401)"));
+        assert!(go.contains("json.NewEncoder(w).Encode"));
+        assert!(go.contains("\"erro\": \"não autorizado\""));
+    }
+
+    #[test]
+    fn test_return_map_lit_direto_implica_json() {
+        // return { chave: "valor" }  → JSON automático
+        let go = codegen(
+            r#"
+route GET /ping {
+    return { status: "ok" }
+}
+"#,
+        );
+        assert!(go.contains("json.NewEncoder(w).Encode"));
+        assert!(go.contains("\"status\": \"ok\""));
     }
 }

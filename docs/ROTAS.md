@@ -74,7 +74,8 @@ route GET /healthz {
 | `return json({...})`    | serializa como JSON com header correto     |
 | `return text("...")`    | escreve texto puro                         |
 | `return status(N)`      | define o status HTTP sem corpo             |
-| `return status(N, ...)` | define o status HTTP e escreve o corpo     |
+| `return status(N, {...})` | define status e serializa objeto como JSON |
+| `return { ... }`        | serializa como JSON automaticamente (v1.0) |
 
 ## Variáveis implícitas
 
