@@ -1,0 +1,23 @@
+import "./usuarios" as usuarios
+
+middleware logger {
+    next()
+}
+
+route GET /usuarios [logger] {
+    return usuarios.listar()
+}
+
+route GET /usuarios/:id [logger] {
+    let id = req.params.id
+    return id
+}
+
+route GET /busca [logger] {
+    let q = req.query["q"]
+    return q
+}
+
+route GET /ping {
+    return json({ status: "ok" })
+}

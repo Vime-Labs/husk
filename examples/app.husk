@@ -1,0 +1,13 @@
+import "./usuarios" as usuarios
+
+route GET /usuarios {
+    return usuarios.listar()
+}
+
+route GET /usuarios/:id {
+    return usuarios.buscar(42)
+}
+
+route GET /ping {
+    return json({ status: "ok" })
+}

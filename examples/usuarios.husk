@@ -1,0 +1,12 @@
+struct Usuario {
+    id   int
+    nome string
+}
+
+fn listar() string {
+    return "João, Maria, Pedro"
+}
+
+fn buscar(id int) string {
+    return "usuario encontrado"
+}

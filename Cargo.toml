@@ -1,0 +1,9 @@
+[workspace]
+members = [
+    "crates/husk-lexer",
+    "crates/husk-parser",
+    "crates/husk-analyzer",
+    "crates/husk-codegen",
+    "crates/husk-cli",
+]
+resolver = "2"

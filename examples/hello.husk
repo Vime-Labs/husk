@@ -1,0 +1,11 @@
+fn greeting(nome string) string {
+    return "Hello, " + nome
+}
+
+route GET /hello {
+    return greeting("")
+}
+
+route GET /ping {
+    return json({ status: "ok" })
+}
