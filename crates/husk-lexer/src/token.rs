@@ -32,6 +32,9 @@ pub enum TokenKind {
     Catch,
     Retry,
     Break,
+    Schema,
+    Required,
+    Model,
 
     // Métodos HTTP
     Get,

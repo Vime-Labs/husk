@@ -303,6 +303,9 @@ impl Lexer {
             "catch" => TokenKind::Catch,
             "retry" => TokenKind::Retry,
             "break" => TokenKind::Break,
+            "schema" => TokenKind::Schema,
+            "required" => TokenKind::Required,
+            "model" => TokenKind::Model,
             _ => TokenKind::Ident(ident),
         }
     }
@@ -480,7 +483,7 @@ route GET /hello {
 
     #[test]
     fn test_keywords() {
-        let tokens = lex("fn return let if else for in try catch retry break route middleware next import as struct");
+        let tokens = lex("fn return let if else for in try catch retry break schema required model route middleware next import as struct");
         assert_eq!(
             tokens,
             vec![
@@ -495,6 +498,9 @@ route GET /hello {
                 TokenKind::Catch,
                 TokenKind::Retry,
                 TokenKind::Break,
+                TokenKind::Schema,
+                TokenKind::Required,
+                TokenKind::Model,
                 TokenKind::Route,
                 TokenKind::Middleware,
                 TokenKind::Next,

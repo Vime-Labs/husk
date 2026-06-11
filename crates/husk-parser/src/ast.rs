@@ -13,6 +13,8 @@ pub enum Item {
     Import(ImportDef),
     MiddlewareDef(MiddlewareDef),
     CorsDef(CorsDef),
+    SchemaDef(SchemaDef),
+    ModelDef(ModelDef),
 }
 
 /// cors { origins: [...] methods: [...] headers: [...] }
@@ -21,6 +23,39 @@ pub struct CorsDef {
     pub origins: Vec<String>,
     pub methods: Vec<String>,
     pub headers: Vec<String>,
+    pub span: Span,
+}
+
+/// schema Nome { campo: tipo validador1 validador2 ... }
+#[derive(Debug, Clone)]
+pub struct SchemaDef {
+    pub name: String,
+    pub fields: Vec<SchemaField>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaField {
+    pub name: String,
+    pub ty: Type,
+    pub validators: Vec<Validator>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Validator {
+    Required,
+    Email,
+    Unique,
+    Min(i64),
+    Max(i64),
+}
+
+/// model Nome { table: "tabela" fields: { campo: tipo [validadores] } }
+#[derive(Debug, Clone)]
+pub struct ModelDef {
+    pub name: String,
+    pub table: String,
+    pub fields: Vec<SchemaField>,
     pub span: Span,
 }
 

@@ -46,6 +46,8 @@ impl Parser {
             TokenKind::Import => Ok(Item::Import(self.parse_import()?)),
             TokenKind::Middleware => Ok(Item::MiddlewareDef(self.parse_middleware()?)),
             TokenKind::Cors => Ok(Item::CorsDef(self.parse_cors()?)),
+            TokenKind::Schema => Ok(Item::SchemaDef(self.parse_schema()?)),
+            TokenKind::Model => Ok(Item::ModelDef(self.parse_model()?)),
             _ => Err(ParseError::new(
                 format!(
                     "esperado item top-level (fn/route/struct/import/middleware/cors), encontrado {:?}",
@@ -130,6 +132,113 @@ impl Parser {
         }
         self.expect(TokenKind::RBrace)?;
         Ok(StructDef { name, fields, span })
+    }
+
+    /// schema Nome { campo: tipo [required] [email] [unique] [min(N)] [max(N)] }
+    fn parse_schema(&mut self) -> Result<SchemaDef, ParseError> {
+        let span = self.current_span();
+        self.expect(TokenKind::Schema)?;
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+        let fields = self.parse_schema_fields()?;
+        self.expect(TokenKind::RBrace)?;
+        Ok(SchemaDef { name, fields, span })
+    }
+
+    /// Reutilizado por schema Nome { } e model Nome { fields: { } }
+    fn parse_schema_fields(&mut self) -> Result<Vec<SchemaField>, ParseError> {
+        let mut fields = Vec::new();
+        while !matches!(self.current_kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let field_name = self.expect_ident()?;
+            self.expect(TokenKind::Colon)?;
+            let ty = self.parse_type()?;
+            let mut validators = Vec::new();
+            loop {
+                match self.current_kind() {
+                    TokenKind::Required => {
+                        self.advance();
+                        validators.push(Validator::Required);
+                    }
+                    TokenKind::Ident(s) => {
+                        let name = s.clone();
+                        if matches!(name.as_str(), "min" | "max" | "email" | "unique") {
+                            if self.peek_next_kind() == Some(&TokenKind::LParen) {
+                                self.advance();
+                                match name.as_str() {
+                                    "min" => {
+                                        let n = self.parse_paren_int()?;
+                                        validators.push(Validator::Min(n));
+                                    }
+                                    "max" => {
+                                        let n = self.parse_paren_int()?;
+                                        validators.push(Validator::Max(n));
+                                    }
+                                    "email" | "unique" => {
+                                        self.expect(TokenKind::LParen)?;
+                                        self.expect(TokenKind::RParen)?;
+                                        match name.as_str() {
+                                            "email" => validators.push(Validator::Email),
+                                            "unique" => validators.push(Validator::Unique),
+                                            _ => unreachable!(),
+                                        }
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            fields.push(SchemaField {
+                name: field_name,
+                ty,
+                validators,
+            });
+        }
+        Ok(fields)
+    }
+
+    /// model Nome { table: "tabela" fields: { campo: tipo [validadores] } }
+    fn parse_model(&mut self) -> Result<ModelDef, ParseError> {
+        let span = self.current_span();
+        self.expect(TokenKind::Model)?;
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+
+        // table: "nome_da_tabela"
+        self.expect_ident()?; // "table"
+        self.expect(TokenKind::Colon)?;
+        let table = match self.current_kind().clone() {
+            TokenKind::Str(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "esperado nome da tabela como string",
+                    self.current_span(),
+                ));
+            }
+        };
+
+        // fields: { ... }
+        self.expect_ident()?; // "fields"
+        self.expect(TokenKind::Colon)?;
+        self.expect(TokenKind::LBrace)?;
+        let fields = self.parse_schema_fields()?;
+        self.expect(TokenKind::RBrace)?;
+        self.expect(TokenKind::RBrace)?;
+        Ok(ModelDef {
+            name,
+            table,
+            fields,
+            span,
+        })
     }
 
     fn parse_import(&mut self) -> Result<ImportDef, ParseError> {
@@ -706,6 +815,25 @@ impl Parser {
         Ok(expr)
     }
 
+    /// min(N) / max(N) — parseia (Int) retornando o valor inteiro
+    fn parse_paren_int(&mut self) -> Result<i64, ParseError> {
+        self.expect(TokenKind::LParen)?;
+        let n = match self.current_kind().clone() {
+            TokenKind::Int(val) => {
+                self.advance();
+                val
+            }
+            _ => {
+                return Err(ParseError::new(
+                    "esperado número inteiro dentro dos parênteses",
+                    self.current_span(),
+                ));
+            }
+        };
+        self.expect(TokenKind::RParen)?;
+        Ok(n)
+    }
+
     fn parse_args(&mut self) -> Result<Vec<Expr>, ParseError> {
         let mut args = Vec::new();
         while !matches!(self.current_kind(), TokenKind::RParen | TokenKind::Eof) {
@@ -846,9 +974,13 @@ impl Parser {
     }
 
     fn advance(&mut self) {
-        if !self.at_eof() {
+        if self.pos < self.tokens.len() {
             self.pos += 1;
         }
+    }
+
+    fn peek_next_kind(&self) -> Option<&TokenKind> {
+        self.tokens.get(self.pos + 1).map(|t| &t.kind)
     }
 
     fn expect(&mut self, kind: TokenKind) -> Result<(), ParseError> {

@@ -49,6 +49,8 @@ pub struct Codegen {
     source_map: RefCell<Vec<(usize, String, usize)>>,
     /// Declarações de estado dos circuit breakers (geradas no escopo global)
     circuit_breaker_decls: RefCell<Vec<String>>,
+    /// Se true, alguma schema tem validador email — gera regex global
+    has_email_validator: Cell<bool>,
 }
 
 impl Codegen {
@@ -67,6 +69,7 @@ impl Codegen {
             source_file: None,
             source_map: RefCell::new(Vec::new()),
             circuit_breaker_decls: RefCell::new(Vec::new()),
+            has_email_validator: Cell::new(false),
         }
     }
 
@@ -120,11 +123,13 @@ impl Codegen {
         for item in &program.items {
             match item {
                 Item::StructDef(s) => body.push_str(&self.gen_struct_def(s)?),
+                Item::SchemaDef(s) => body.push_str(&self.gen_schema_def(s)?),
                 Item::FnDef(f) => body.push_str(&self.gen_fn(f)?),
                 Item::MiddlewareDef(m) => body.push_str(&self.gen_middleware(m)?),
                 Item::RouteDef(_) => {}
                 Item::Import(_) => {}
                 Item::CorsDef(_) => {}
+                Item::ModelDef(m) => body.push_str(&self.gen_model_def(m)?),
             }
         }
 
@@ -138,6 +143,11 @@ impl Codegen {
         for decl in self.circuit_breaker_decls.borrow().iter() {
             file.push_str(decl);
             file.push('\n');
+        }
+
+        // Validador email: regex global
+        if self.has_email_validator.get() {
+            file.push_str("var __emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$`)\n\n");
         }
 
         file.push_str(&body);
@@ -210,6 +220,20 @@ impl Codegen {
                 }
                 Item::MiddlewareDef(m) => self.scan_block_imports(&m.body, Ctx::Middleware),
                 _ => {}
+            }
+        }
+
+        // Schema definitions: check for email validator → need regexp
+        for item in &program.items {
+            if let Item::SchemaDef(s) = item {
+                for field in &s.fields {
+                    for v in &field.validators {
+                        if matches!(v, Validator::Email) {
+                            self.go_imports.borrow_mut().insert("regexp".into());
+                            self.has_email_validator.set(true);
+                        }
+                    }
+                }
             }
         }
 
@@ -405,6 +429,94 @@ impl Codegen {
             ));
         }
         out.push_str("}\n\n");
+        Ok(out)
+    }
+
+    /// schema Nome { campo: tipo [required] [email] [min(N)] [max(N)] }
+    /// Gera struct Go + Validate() method.
+    fn gen_schema_def(&self, s: &SchemaDef) -> Result<String, CodegenError> {
+        let mut out = format!("type {} struct {{\n", s.name);
+        for field in &s.fields {
+            out.push_str(&format!(
+                "\t{} {} `json:\"{}\"`\n",
+                capitalize(&field.name),
+                go_type(&field.ty),
+                field.name,
+            ));
+        }
+        out.push_str("}\n\n");
+
+        out.push_str(&format!(
+            "func (s *{}) Validate() map[string]string {{\n\
+             \terrs := make(map[string]string)\n",
+            s.name
+        ));
+
+        for field in &s.fields {
+            let cap_name = capitalize(&field.name);
+            let go_ty = go_type(&field.ty);
+            for v in &field.validators {
+                match v {
+                    Validator::Required => {
+                        out.push_str(&format!(
+                            "\tif s.{} == {} {{\n\
+                             \t\terrs[\"{}\"] = \"campo obrigatório\"\n\
+                             \t}}\n",
+                            cap_name,
+                            zero_value(&field.ty),
+                            field.name,
+                        ));
+                    }
+                    Validator::Email => {
+                        out.push_str(&format!(
+                            "\tif s.{} != \"\" && !__emailRegex.MatchString(s.{}) {{\n\
+                             \t\terrs[\"{}\"] = \"email inválido\"\n\
+                             \t}}\n",
+                            cap_name, cap_name, field.name,
+                        ));
+                    }
+                    Validator::Unique => {
+                        // Unique é tratado em nível de banco; não gera validação inline
+                    }
+                    Validator::Min(n) => {
+                        if matches!(field.ty, Type::String) {
+                            out.push_str(&format!(
+                                "\tif len(s.{}) < {} {{\n\
+                                 \t\terrs[\"{}\"] = \"mínimo {} caracteres\"\n\
+                                 \t}}\n",
+                                cap_name, n, field.name, n,
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                "\tif s.{} < {} {{\n\
+                                 \t\terrs[\"{}\"] = \"mínimo {}\"\n\
+                                 \t}}\n",
+                                cap_name, n, field.name, n,
+                            ));
+                        }
+                    }
+                    Validator::Max(n) => {
+                        if matches!(field.ty, Type::String) {
+                            out.push_str(&format!(
+                                "\tif len(s.{}) > {} {{\n\
+                                 \t\terrs[\"{}\"] = \"máximo {} caracteres\"\n\
+                                 \t}}\n",
+                                cap_name, n, field.name, n,
+                            ));
+                        } else {
+                            out.push_str(&format!(
+                                "\tif s.{} > {} {{\n\
+                                 \t\terrs[\"{}\"] = \"máximo {}\"\n\
+                                 \t}}\n",
+                                cap_name, n, field.name, n,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        out.push_str("\treturn errs\n}\n\n");
         Ok(out)
     }
 
@@ -1327,6 +1439,49 @@ impl Codegen {
             return Ok(format!("fmt.Errorf({})", arg_go));
         }
 
+        // validate(req.body, SchemaName) → decodifica JSON + valida, propaga erros HTTP
+        if is_builtin(&call.callee, "validate") {
+            if call.args.len() != 2 {
+                return Err(CodegenError::new(
+                    "validate() requer 2 argumentos: req.body e o nome do schema",
+                ));
+            }
+            let schema_name = match &call.args[1] {
+                Expr::Ident(name) => name.clone(),
+                _ => {
+                    return Err(CodegenError::new(
+                        "validate() requer um nome de schema como segundo argumento",
+                    ));
+                }
+            };
+            let n = self.try_var_counter.get() + 1;
+            self.try_var_counter.set(n);
+            let val_var = format!("__validate_{}", n);
+            let preamble = format!(
+                "var {} {}\n\
+                 if err := json.NewDecoder(r.Body).Decode(&{}); err != nil {{\n\
+                 \tw.WriteHeader(400)\n\
+                 \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+                 \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+                 \t\t\"erro\": \"json inválido\"\
+                 \t}})\n\
+                 \treturn\n\
+                 }}\n\
+                 if errs := {}.Validate(); len(errs) > 0 {{\n\
+                 \tw.WriteHeader(422)\n\
+                 \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+                 \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+                 \t\t\"erros\": errs\
+                 \t}})\n\
+                 \treturn\n\
+                 }}",
+                val_var, schema_name, val_var, val_var
+            );
+            self.pending_try.borrow_mut().push(preamble);
+            self.go_imports.borrow_mut().insert("encoding/json".into());
+            return Ok(val_var);
+        }
+
         // require_role(actual_value, expected_role) ou require_role(actual_value, expected_role, "mensagem")
         // Compara o valor real com o esperado: se diferente, 403
         // Ex: require_role(ctx.role, "master")
@@ -1637,6 +1792,16 @@ fn go_type(ty: &Type) -> String {
         Type::Map => "map[string]interface{}".into(),
         Type::List(inner) => format!("[]{}", go_type(inner)),
         Type::Named(n) => n.clone(),
+    }
+}
+
+fn zero_value(ty: &Type) -> &'static str {
+    match ty {
+        Type::Int => "0",
+        Type::Float => "0",
+        Type::String => "\"\"",
+        Type::Bool => "false",
+        _ => "nil",
     }
 }
 
@@ -2636,5 +2801,47 @@ route GET /user {
         assert!(go.contains("failures >= 5"));
         assert!(go.contains("\"sync\""));
         assert!(go.contains("\"time\""));
+    }
+
+    #[test]
+    fn test_schema_simples() {
+        let go = codegen(
+            r#"
+schema Usuario {
+    nome: string required
+    email: string required email()
+    idade: int min(18) max(120)
+}
+"#,
+        );
+        assert!(go.contains("type Usuario struct {"));
+        assert!(go.contains("Nome string `json:\"nome\"`"));
+        assert!(go.contains("Email string `json:\"email\"`"));
+        assert!(go.contains("Idade int `json:\"idade\"`"));
+        assert!(go.contains("func (s *Usuario) Validate() map[string]string {"));
+        assert!(go.contains("\"campo obrigatório\""));
+        assert!(go.contains("\"email inválido\""));
+        assert!(go.contains("\"mínimo 18\""));
+        assert!(go.contains("\"máximo 120\""));
+        assert!(go.contains("__emailRegex"));
+    }
+
+    #[test]
+    fn test_validate_builtin() {
+        let go = codegen(
+            r#"
+schema Usuario {
+    nome: string required
+}
+route POST /usuarios {
+    let data = validate(req.body, Usuario)
+    return json(data)
+}
+"#,
+        );
+        assert!(go.contains("json.NewDecoder(r.Body).Decode"));
+        assert!(go.contains("__validate_1"));
+        assert!(go.contains("w.WriteHeader(400)"));
+        assert!(go.contains("w.WriteHeader(422)"));
     }
 }

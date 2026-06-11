@@ -66,6 +66,15 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // validate(req.body, SchemaName) — decodifica JSON + valida
+        let _ = global.declare(
+            "validate",
+            Symbol::Function(FnSignature {
+                params: vec![],
+                return_types: vec![],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         // erro(msg string) error — cria um valor de erro customizado
         let _ = global.declare(
             "erro",
@@ -219,6 +228,26 @@ impl Checker {
                         self.errors.push(e);
                     }
                 }
+                Item::SchemaDef(s) => {
+                    for field in &s.fields {
+                        if matches!(field.ty, Type::Map | Type::List(_) | Type::Error | Type::Named(_)) {
+                            if field.validators.iter().any(|v| {
+                                matches!(v, Validator::Min(_) | Validator::Max(_) | Validator::Required)
+                            }) {
+                                self.errors.push(SemanticError::new(
+                                    format!("validador não suportado para campo '{}' com este tipo", field.name),
+                                    Span { line: 0, col: 0 },
+                                ));
+                            }
+                        }
+                    }
+                }
+                Item::ModelDef(m) => {
+                    // Models registram o nome como símbolo (para alias.method calls)
+                    if let Err(e) = self.global.declare(&m.name, Symbol::Module, &m.span) {
+                        self.errors.push(e);
+                    }
+                }
                 Item::MiddlewareDef(m) => {
                     if let Err(e) = self.global.declare(&m.name, Symbol::Middleware, &m.span) {
                         self.errors.push(e);
@@ -229,6 +258,8 @@ impl Checker {
                 }
                 Item::RouteDef(_) => {} // rotas são verificadas na segunda passada
                 Item::CorsDef(_) => {}
+                Item::SchemaDef(_) => {}
+                Item::ModelDef(_) => {}
             }
         }
     }
@@ -595,7 +626,7 @@ impl Checker {
         };
 
         match fn_name.as_str() {
-            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" | "erro" | "assert_eq" => {
+            "json" | "text" | "status" | "set_ctx" | "parse_int" | "float" | "erro" | "assert_eq" | "validate" => {
                 return Some(TypeInfo::Unknown)
             }
             "string" => return Some(TypeInfo::String),

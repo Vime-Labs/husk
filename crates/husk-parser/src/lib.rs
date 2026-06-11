@@ -220,4 +220,30 @@ route GET /list {
         };
         assert!(matches!(r.body.stmts[0], Stmt::ForIn(_)));
     }
+
+    #[test]
+    fn test_schema_simples() {
+        let prog = parse(
+            r#"
+schema Usuario {
+    nome: string required
+    email: string required email()
+    idade: int min(18) max(120)
+}
+"#,
+        );
+        assert_eq!(prog.items.len(), 1);
+        let Item::SchemaDef(s) = &prog.items[0] else {
+            panic!("esperado SchemaDef")
+        };
+        assert_eq!(s.name, "Usuario");
+        assert_eq!(s.fields.len(), 3);
+        assert_eq!(s.fields[0].name, "nome");
+        assert!(matches!(s.fields[0].ty, Type::String));
+        assert_eq!(s.fields[0].validators.len(), 1);
+        assert!(matches!(s.fields[0].validators[0], Validator::Required));
+        assert!(matches!(s.fields[1].validators[1], Validator::Email));
+        assert!(matches!(s.fields[2].validators[0], Validator::Min(18)));
+        assert!(matches!(s.fields[2].validators[1], Validator::Max(120)));
+    }
 }

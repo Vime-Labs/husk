@@ -34,6 +34,8 @@ fn item_start_line(item: &Item) -> usize {
         Item::Import(i) => i.span.line,
         Item::MiddlewareDef(m) => m.span.line,
         Item::CorsDef(c) => c.span.line,
+        Item::SchemaDef(s) => s.span.line,
+        Item::ModelDef(m) => m.span.line,
     }
 }
 
@@ -85,6 +87,8 @@ fn format_item(item: &Item, out: &mut String, indent: usize) {
         Item::Import(i) => format_import(i, out, indent),
         Item::MiddlewareDef(m) => format_middleware_def(m, out, indent),
         Item::CorsDef(c) => format_cors_def(c, out, indent),
+        Item::SchemaDef(s) => format_schema_def(s, out, indent),
+        Item::ModelDef(m) => format_model_def(m, out, indent),
     }
 }
 
@@ -113,6 +117,14 @@ fn format_item_with_cursor(item: &Item, cursor: &mut CommentCursor, out: &mut St
         Item::CorsDef(c) => {
             cursor.emit_before_line(c.span.line, indent, out);
             format_cors_def(c, out, indent);
+        }
+        Item::SchemaDef(s) => {
+            cursor.emit_before_line(s.span.line, indent, out);
+            format_schema_def(s, out, indent);
+        }
+        Item::ModelDef(m) => {
+            cursor.emit_before_line(m.span.line, indent, out);
+            format_model_def(m, out, indent);
         }
     }
 }
@@ -249,6 +261,47 @@ fn format_cors_def(c: &CorsDef, out: &mut String, indent: usize) {
         }
         out.push_str("]\n");
     }
+    out.push_str(&format!("{}}}", i));
+}
+
+fn format_schema_def(s: &SchemaDef, out: &mut String, indent: usize) {
+    let i = indent_str(indent);
+    out.push_str(&format!("{}schema {} {{\n", i, s.name));
+    for field in &s.fields {
+        out.push_str(&format!("{}  {}: {}", i, field.name, format_type(&field.ty)));
+        for v in &field.validators {
+            match v {
+                Validator::Required => out.push_str(" required"),
+                Validator::Email => out.push_str(" email()"),
+                Validator::Unique => out.push_str(" unique()"),
+                Validator::Min(n) => out.push_str(&format!(" min({})", n)),
+                Validator::Max(n) => out.push_str(&format!(" max({})", n)),
+            }
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!("{}}}", i));
+}
+
+fn format_model_def(m: &ModelDef, out: &mut String, indent: usize) {
+    let i = indent_str(indent);
+    out.push_str(&format!("{}model {} {{\n", i, m.name));
+    out.push_str(&format!("{}  table: \"{}\"\n", i, m.table));
+    out.push_str(&format!("{}  fields: {{\n", i));
+    for field in &m.fields {
+        out.push_str(&format!("{}    {}: {}", i, field.name, format_type(&field.ty)));
+        for v in &field.validators {
+            match v {
+                Validator::Required => out.push_str(" required"),
+                Validator::Email => out.push_str(" email()"),
+                Validator::Unique => out.push_str(" unique()"),
+                Validator::Min(n) => out.push_str(&format!(" min({})", n)),
+                Validator::Max(n) => out.push_str(&format!(" max({})", n)),
+            }
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!("{}  }}\n", i));
     out.push_str(&format!("{}}}", i));
 }
 
