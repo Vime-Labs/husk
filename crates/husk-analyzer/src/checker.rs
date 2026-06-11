@@ -332,6 +332,7 @@ impl Checker {
                 let _ = self.check_expr(&t.expr, scope, ctx);
                 TypeInfo::Unknown
             }
+            Expr::Spread(e) => self.check_expr(e, scope, ctx),
         }
     }
 

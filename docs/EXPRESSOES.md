@@ -72,6 +72,26 @@ let resultado = soma(10, 20)
 greeting()
 ```
 
+### Spread `...`
+
+Um map pode ser desestruturado como argumentos de função com `...`:
+
+```husk
+let cliente = clientes.criar(body...)? 500 "Erro"
+```
+
+Equivalente a:
+
+```husk
+let cliente = clientes.criar(
+    body["nome"], body["cpf_cnpj"], body["tipo"],
+    body["segmento"], body["telefone"], body["email"],
+    // ...
+)? 500 "Erro"
+```
+
+O `...` mapeia as **chaves do map** para os **nomes dos parâmetros** da função automaticamente. Os tipos são convertidos conforme o parâmetro espera (`string`, `int`, `float`, `bool`).
+
 ## Condicional
 
 ```husk

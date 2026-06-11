@@ -93,7 +93,7 @@ A conexão é estabelecida automaticamente a partir da variável `DATABASE_URL`.
 | `db.connect(url)`            | `error`           | Conecta explicitamente            |
 | `db.query(sql, args...)`     | `([]map, error)`  | Retorna todas as linhas           |
 | `db.query_one(sql, args...)` | `(map, error)`    | Retorna a primeira linha          |
-| `db.exec(sql, args...)`      | `error`           | Executa sem retornar linhas       |
+| `db.exec(sql, args...)`      | `(interface{}, error)` | Executa sem retornar linhas. Use com `?`: `let _ = db.exec(sql, args...)?` |
 
 ```husk
 import "husk/postgres" as db

@@ -189,6 +189,8 @@ pub enum Expr {
     StructInit(StructInit),
     /// expr? [status] ["msg"]  — try operator
     Try(TryExpr),
+    /// expr...  — spread: desestrutura map/array em argumentos
+    Spread(Box<Expr>),
 }
 
 #[derive(Debug, Clone)]

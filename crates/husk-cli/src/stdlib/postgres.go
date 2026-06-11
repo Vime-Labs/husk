@@ -65,10 +65,10 @@ func db_query_one(sql string, args ...interface{}) (map[string]interface{}, erro
 	return rows[0], nil
 }
 
-func db_exec(sql string, args ...interface{}) error {
+func db_exec(sql string, args ...interface{}) (interface{}, error) {
 	if pgPool == nil {
-		return fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
+		return nil, fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
 	}
 	_, err := pgPool.Exec(context.Background(), sql, args...)
-	return err
+	return nil, err
 }

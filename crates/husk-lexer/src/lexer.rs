@@ -83,7 +83,17 @@ impl Lexer {
             }
             '.' => {
                 self.advance();
-                TokenKind::Dot
+                if self.current_is('.') {
+                    self.advance();
+                    if self.current_is('.') {
+                        self.advance();
+                        TokenKind::DotDotDot
+                    } else {
+                        return Err(LexError::unexpected_char('.', span));
+                    }
+                } else {
+                    TokenKind::Dot
+                }
             }
             '%' => {
                 self.advance();

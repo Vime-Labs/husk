@@ -1,7 +1,7 @@
 use husk_parser::ast::*;
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[derive(Debug)]
 pub struct CodegenError {
@@ -35,6 +35,8 @@ pub struct Codegen {
     try_var_counter: Cell<usize>,
     /// Preâmbulos pendentes gerados por expr? dentro de expressões
     pending_try: RefCell<Vec<String>>,
+    /// Registro de parâmetros de funções: nome → [(param_name, type)]
+    fn_params: HashMap<String, Vec<(String, Type)>>,
 }
 
 impl Codegen {
@@ -46,12 +48,26 @@ impl Codegen {
             ctx_var_counter: Cell::new(0),
             try_var_counter: Cell::new(0),
             pending_try: RefCell::new(Vec::new()),
+            fn_params: HashMap::new(),
         }
     }
 
     pub fn generate(&mut self, program: &Program) -> Result<String, CodegenError> {
         self.ctx_var_counter.set(0);
         self.try_var_counter.set(0);
+
+        // Registra parâmetros de todas as funções (para spread body...)
+        for item in &program.items {
+            if let Item::FnDef(f) = item {
+                let params: Vec<(String, Type)> = f
+                    .params
+                    .iter()
+                    .map(|p| (p.name.clone(), p.ty.clone()))
+                    .collect();
+                self.fn_params.insert(f.name.clone(), params);
+            }
+        }
+
         for item in &program.items {
             if let Item::Import(imp) = item {
                 if imp.is_stdlib {
@@ -205,6 +221,7 @@ impl Codegen {
                 self.scan_expr_imports(&t.expr);
                 self.go_imports.insert("encoding/json".into());
             }
+            Expr::Spread(e) => self.scan_expr_imports(e),
             _ => {}
         }
     }
@@ -588,6 +605,7 @@ impl Codegen {
             Expr::MapLit(m) => self.gen_map_lit(m, ctx),
             Expr::StructInit(s) => self.gen_struct_init(s, ctx),
             Expr::Try(t) => self.gen_try_expr(t, ctx),
+            Expr::Spread(e) => self.gen_expr(e, ctx),
         }
     }
 
@@ -768,26 +786,58 @@ impl Codegen {
         // usuário: usuarios.listar() → listar()
         if let Expr::FieldAccess(receiver, method) = call.callee.as_ref() {
             if let Expr::Ident(alias) = receiver.as_ref() {
-                let args = self.gen_args(&call.args, ctx)?;
+                let fn_name = if self.stdlib_aliases.contains(alias.as_str()) {
+                    format!("{}_{}", alias, method)
+                } else {
+                    method.clone()
+                };
+                let params = self.fn_params.get(&fn_name).map(|p| p.as_slice());
+                let args = self.gen_args(&call.args, ctx, params)?;
                 if self.stdlib_aliases.contains(alias.as_str()) {
                     return Ok(format!("{}_{}({})", alias, method, args));
                 }
                 if self.user_aliases.contains(alias.as_str()) {
-                    return Ok(format!("{}({})", method, args));
+                    return Ok(format!("{}_{}({})", alias, method, args));
                 }
             }
         }
 
+        let fn_name = if let Expr::Ident(name) = call.callee.as_ref() {
+            self.fn_params.get(name).map(|p| p.as_slice())
+        } else {
+            None
+        };
+        let args = self.gen_args(&call.args, ctx, fn_name)?;
         let callee = self.gen_expr(&call.callee, ctx)?;
-        let args = self.gen_args(&call.args, ctx)?;
         Ok(format!("{}({})", callee, args))
     }
 
-    fn gen_args(&self, args: &[Expr], ctx: Ctx) -> Result<String, CodegenError> {
-        args.iter()
-            .map(|a| self.gen_expr(a, ctx))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|v| v.join(", "))
+    fn gen_args(
+        &self,
+        args: &[Expr],
+        ctx: Ctx,
+        params: Option<&[(String, Type)]>,
+    ) -> Result<String, CodegenError> {
+        let mut out = Vec::new();
+        for arg in args {
+            if let Expr::Spread(spread) = arg {
+                let map_expr = self.gen_expr(spread, ctx)?;
+                if let Some(params) = params {
+                    for (pname, pty) in params.iter() {
+                        let cast = match pty {
+                            Type::Int => ".(int)",
+                            Type::Float => ".(float64)",
+                            Type::Bool => ".(bool)",
+                            _ => ".(string)",
+                        };
+                        out.push(format!("{}[\"{}\"]{}", map_expr, pname, cast));
+                    }
+                }
+            } else {
+                out.push(self.gen_expr(arg, ctx)?);
+            }
+        }
+        Ok(out.join(", "))
     }
 
     fn gen_map_lit(&self, m: &MapLit, ctx: Ctx) -> Result<String, CodegenError> {
@@ -905,6 +955,7 @@ fn expr_uses_body(expr: &Expr) -> bool {
         Expr::BinOp(l, _, r) => expr_uses_body(l) || expr_uses_body(r),
         Expr::Unary(_, e) => expr_uses_body(e),
         Expr::Try(t) => expr_uses_body(&t.expr),
+        Expr::Spread(e) => expr_uses_body(e),
         _ => false,
     }
 }
@@ -1384,6 +1435,21 @@ route GET /convert {
         assert!(go.contains("strconv.Atoi(\"42\")"));
         assert!(go.contains("\"strconv\""));
         assert!(go.contains("__try1_val, __try1_err := strconv.Atoi(\"42\")"));
+    }
+
+    #[test]
+    fn test_spread_body() {
+        let go = codegen(
+            r#"
+fn criar(nome string, idade int) map { return nil }
+route POST /criar {
+    let body = req.body
+    let x = criar(body...)?
+    return x
+}
+"#,
+        );
+        assert!(go.contains("criar(body[\"nome\"].(string), body[\"idade\"].(int))"));
     }
 
     #[test]

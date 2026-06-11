@@ -492,6 +492,10 @@ impl Parser {
                         message,
                     });
                 }
+                TokenKind::DotDotDot => {
+                    self.advance(); // consome ...
+                    expr = Expr::Spread(Box::new(expr));
+                }
                 _ => break,
             }
         }

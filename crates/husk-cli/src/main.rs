@@ -312,7 +312,12 @@ fn resolve_imports(
 
         for item in mod_program.items {
             match item {
-                Item::FnDef(_) | Item::StructDef(_) => program.items.push(item),
+                Item::FnDef(f) => {
+                    let mut f = f;
+                    f.name = format!("{}_{}", imp.alias, f.name);
+                    program.items.push(Item::FnDef(f));
+                }
+                Item::StructDef(_) => program.items.push(item),
                 _ => {}
             }
         }
