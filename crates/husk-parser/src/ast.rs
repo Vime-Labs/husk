@@ -61,20 +61,22 @@ pub struct ImportDef {
     pub span: Span,
 }
 
-/// middleware nome { corpo }
+/// middleware nome [-> ctx_var] { corpo }
 #[derive(Debug, Clone)]
 pub struct MiddlewareDef {
     pub name: String,
+    pub ctx_var: Option<String>,
     pub body: Block,
     pub span: Span,
 }
 
-/// route MÉTODO /caminho [mw1, mw2] { corpo }
+/// route MÉTODO /caminho [mw1, mw2] [-> ctx_var] { corpo }
 #[derive(Debug, Clone)]
 pub struct RouteDef {
     pub method: HttpMethod,
     pub path: RoutePath,
     pub middlewares: Vec<String>,
+    pub ctx_var: Option<String>,
     pub body: Block,
     pub span: Span,
 }
@@ -96,7 +98,8 @@ pub struct RoutePath {
 #[derive(Debug, Clone)]
 pub enum PathSegment {
     Literal(String),
-    Param(String),
+    /// name, optional type (e.g. :id<int>)
+    Param(String, Option<Type>),
 }
 
 impl RoutePath {
@@ -106,7 +109,7 @@ impl RoutePath {
             s.push('/');
             match seg {
                 PathSegment::Literal(lit) => s.push_str(lit),
-                PathSegment::Param(name) => {
+                PathSegment::Param(name, _ty) => {
                     s.push('{');
                     s.push_str(name);
                     s.push('}');
@@ -117,6 +120,18 @@ impl RoutePath {
             s.push('/');
         }
         s
+    }
+
+    /// Retorna o tipo associado a um parâmetro pelo nome, se houver
+    pub fn param_type(&self, name: &str) -> Option<&Type> {
+        for seg in &self.segments {
+            if let PathSegment::Param(n, ty) = seg {
+                if n == name {
+                    return ty.as_ref();
+                }
+            }
+        }
+        None
     }
 }
 
@@ -135,6 +150,8 @@ pub enum Stmt {
     /// let x = expr?  — try com propagação de erro HTTP
     TryLet(TryLetStmt),
     If(IfStmt),
+    /// assignment: target = expr  (e.g. ctx.field = value)
+    Assign(AssignStmt),
     Expr(Expr),
 }
 
@@ -173,6 +190,14 @@ pub struct IfStmt {
     pub condition: Expr,
     pub then_block: Block,
     pub else_block: Option<Block>,
+}
+
+/// target = value — usado para ctx.field = expr
+#[derive(Debug, Clone)]
+pub struct AssignStmt {
+    /// O alvo da atribuição (ex: ctx.field acessado como FieldAccess(Ident("ctx"), "field"))
+    pub target: Box<Expr>,
+    pub value: Expr,
 }
 
 #[derive(Debug, Clone)]

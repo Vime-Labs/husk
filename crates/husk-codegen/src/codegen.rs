@@ -37,6 +37,12 @@ pub struct Codegen {
     pending_try: RefCell<Vec<String>>,
     /// Registro de parâmetros de funções: nome → [(param_name, type)]
     fn_params: HashMap<String, Vec<(String, Type)>>,
+    /// Path da rota atual (para typed params via :id<int>)
+    current_route_path: RefCell<Option<RoutePath>>,
+    /// Nome da variável de contexto atual (definido via -> ctx)
+    current_ctx_name: RefCell<Option<String>>,
+    /// Nome do middleware atual (para namespacing do ctx)
+    current_middleware_name: RefCell<Option<String>>,
 }
 
 impl Codegen {
@@ -49,6 +55,9 @@ impl Codegen {
             try_var_counter: Cell::new(0),
             pending_try: RefCell::new(Vec::new()),
             fn_params: HashMap::new(),
+            current_route_path: RefCell::new(None),
+            current_ctx_name: RefCell::new(None),
+            current_middleware_name: RefCell::new(None),
         }
     }
 
@@ -121,6 +130,17 @@ impl Codegen {
                     if block_uses_body(&r.body) {
                         self.go_imports.insert("encoding/json".into());
                     }
+                    // Verifica se a rota tem parâmetros tipados (ex: :id<int>)
+                    for seg in &r.path.segments {
+                        if let PathSegment::Param(_name, Some(ty)) = seg {
+                            match ty {
+                                Type::Int | Type::Float => {
+                                    self.go_imports.insert("strconv".into());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     self.scan_block_imports(&r.body, Ctx::Route);
                 }
                 Item::MiddlewareDef(m) => self.scan_block_imports(&m.body, Ctx::Middleware),
@@ -162,6 +182,16 @@ impl Codegen {
                     self.scan_block_imports(eb, ctx);
                 }
             }
+            Stmt::Assign(a) => {
+                self.scan_expr_imports(&a.target);
+                self.scan_expr_imports(&a.value);
+                // ctx.field = value usa context.WithValue
+                if let Expr::FieldAccess(obj, _field) = a.target.as_ref() {
+                    if let Expr::Ident(_name) = obj.as_ref() {
+                        self.go_imports.insert("context".into());
+                    }
+                }
+            }
         }
     }
 
@@ -199,6 +229,23 @@ impl Codegen {
                 }
                 if is_builtin(&call.callee, "require_field") {
                     self.go_imports.insert("encoding/json".into());
+                }
+                // String built-ins
+                if matches!(
+                    call.callee.as_ref(),
+                    Expr::Ident(n)
+                        if matches!(n.as_str(),
+                            "contains" | "starts_with" | "replace"
+                            | "split" | "trim" | "upper" | "lower")
+                ) {
+                    self.go_imports.insert("strings".into());
+                }
+                // Math built-ins
+                if matches!(
+                    call.callee.as_ref(),
+                    Expr::Ident(n) if matches!(n.as_str(), "abs" | "sqrt")
+                ) {
+                    self.go_imports.insert("math".into());
                 }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
@@ -303,6 +350,9 @@ impl Codegen {
     // --- middlewares ---
 
     fn gen_middleware(&self, m: &MiddlewareDef) -> Result<String, CodegenError> {
+        *self.current_middleware_name.borrow_mut() = Some(m.name.clone());
+        *self.current_ctx_name.borrow_mut() = m.ctx_var.clone();
+
         let mut s = format!(
             "func {}(next http.Handler) http.Handler {{\n\
              \treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {{\n",
@@ -310,6 +360,9 @@ impl Codegen {
         );
         s.push_str(&self.gen_block(&m.body, Ctx::Middleware, 2)?);
         s.push_str("\t})\n}\n\n");
+
+        *self.current_middleware_name.borrow_mut() = None;
+        *self.current_ctx_name.borrow_mut() = None;
         Ok(s)
     }
 
@@ -330,6 +383,9 @@ impl Codegen {
     }
 
     fn gen_route_registration(&self, route: &RouteDef) -> Result<String, CodegenError> {
+        *self.current_route_path.borrow_mut() = Some(route.path.clone());
+        *self.current_ctx_name.borrow_mut() = route.ctx_var.clone();
+
         let method = match route.method {
             HttpMethod::Get => "Get",
             HttpMethod::Post => "Post",
@@ -350,12 +406,48 @@ impl Codegen {
             "\t{}.{}(\"{}\", func(w http.ResponseWriter, r *http.Request) {{\n",
             router, method, path
         );
+
+        // Typed params: :id<int> → gera variável pré-parseada
+        // (import strconv já foi adicionado na fase de scan)
+        let mut has_typed_param = false;
+        for seg in &route.path.segments {
+            if let PathSegment::Param(name, Some(ty)) = seg {
+                has_typed_param = true;
+                match ty {
+                    Type::Int => {
+                        s.push_str(&format!(
+                            "\t\t_huskParam_{}, _ := strconv.Atoi(chi.URLParam(r, \"{}\"))\n",
+                            name, name
+                        ));
+                    }
+                    Type::Float => {
+                        s.push_str(&format!(
+                            "\t\t_huskParam_{}, _ := strconv.ParseFloat(chi.URLParam(r, \"{}\"), 64)\n",
+                            name, name
+                        ));
+                    }
+                    _ => {
+                        s.push_str(&format!(
+                            "\t\t_huskParam_{} := chi.URLParam(r, \"{}\")\n",
+                            name, name
+                        ));
+                    }
+                }
+            }
+        }
+        if has_typed_param {
+            s.push('\n');
+        }
+
         if block_uses_body(&route.body) {
             s.push_str("\t\tvar _huskBody map[string]interface{}\n");
             s.push_str("\t\tjson.NewDecoder(r.Body).Decode(&_huskBody)\n");
         }
         s.push_str(&self.gen_block(&route.body, Ctx::Route, 2)?);
         s.push_str("\t})\n");
+
+        *self.current_route_path.borrow_mut() = None;
+        *self.current_ctx_name.borrow_mut() = None;
         Ok(s)
     }
 
@@ -434,6 +526,7 @@ impl Codegen {
             }
             Stmt::If(i) => self.gen_if(i, ctx, indent),
             Stmt::TryLet(t) => self.gen_try_let(t, ctx),
+            Stmt::Assign(a) => self.gen_assign(a, ctx),
             Stmt::Expr(e) => self.gen_expr(e, ctx),
         };
 
@@ -446,6 +539,34 @@ impl Codegen {
         } else {
             Ok(format!("{}{}", buf, stmt))
         }
+    }
+
+    /// Gera código para atribuição: ctx.field = value
+    /// A importação de "context" é adicionada na fase de scan (scan_stmt_imports)
+    fn gen_assign(&self, a: &AssignStmt, ctx: Ctx) -> Result<String, CodegenError> {
+        // ctx.field = value  dentro de middleware com current_ctx_name
+        if let Expr::FieldAccess(obj, field) = a.target.as_ref() {
+            if let Expr::Ident(var_name) = obj.as_ref() {
+                if let Some(ref ctx_name) = *self.current_ctx_name.borrow() {
+                    if var_name == ctx_name {
+                        let val = self.gen_expr(&a.value, ctx)?;
+                        let n = self.ctx_var_counter.get() + 1;
+                        self.ctx_var_counter.set(n);
+                        let ctx_var = format!("_huskCtx{}", n);
+                        // Namespace a chave com o nome da variável de contexto
+                        let ctx_key = format!("__husk_ctx_{}", field);
+                        return Ok(format!(
+                            "{} := context.WithValue(r.Context(), \"{}\", {})\nr = r.WithContext({})",
+                            ctx_var, ctx_key, val, ctx_var
+                        ));
+                    }
+                }
+            }
+        }
+        // Fallback: geração genérica
+        let target = self.gen_expr(&a.target, ctx)?;
+        let val = self.gen_expr(&a.value, ctx)?;
+        Ok(format!("{} = {}", target, val))
     }
 
     fn gen_return(&self, exprs: &[Expr], ctx: Ctx) -> Result<String, CodegenError> {
@@ -661,11 +782,28 @@ impl Codegen {
     }
 
     fn gen_field_access(&self, obj: &Expr, field: &str, ctx: Ctx) -> Result<String, CodegenError> {
-        // req.params.campo → chi.URLParam(r, "campo")
+        // req.params.campo → chi.URLParam(r, "campo") ou _huskParam_campo (se tipado)
         if let Expr::FieldAccess(inner, sub) = obj {
             if let Expr::Ident(name) = inner.as_ref() {
                 if name == "req" && sub == "params" {
+                    // Verifica se o parâmetro tem tipo anotado (ex: :id<int>)
+                    if let Some(ref path) = *self.current_route_path.borrow() {
+                        if let Some(_ty) = path.param_type(field) {
+                            return Ok(format!("_huskParam_{}", field));
+                        }
+                    }
                     return Ok(format!("chi.URLParam(r, \"{}\")", field));
+                }
+            }
+        }
+
+        // ctx_var.field  — acesso ao contexto tipado (quando -> ctx está ativo)
+        // Dentro de middleware ou rota que declarou -> ctx_var
+        if let Expr::Ident(name) = obj {
+            if let Some(ref ctx_name) = *self.current_ctx_name.borrow() {
+                if name == ctx_name {
+                    let ctx_key = format!("__husk_ctx_{}", field);
+                    return Ok(format!("r.Context().Value(\"{}\").(string)", ctx_key));
                 }
             }
         }
@@ -769,22 +907,26 @@ impl Codegen {
             return Ok(format!("strconv.Atoi({})", arg_go));
         }
 
-        // require_role("admin") ou require_role("admin", "mensagem")
-        // Gera: if r.Context().Value("role") != "admin" { w.WriteHeader(403); json...; return }
+        // require_role(actual_value, expected_role) ou require_role(actual_value, expected_role, "mensagem")
+        // Compara o valor real com o esperado: se diferente, 403
+        // Ex: require_role(ctx.role, "master")
         if is_builtin(&call.callee, "require_role") {
-            let role = call
-                .args
-                .first()
-                .ok_or_else(|| CodegenError::new("require_role() requer um nome de role"))?;
-            let role_go = self.gen_expr(role, ctx)?;
+            let actual = call.args.get(0).ok_or_else(|| {
+                CodegenError::new("require_role() requer o valor real como 1o argumento")
+            })?;
+            let expected = call.args.get(1).ok_or_else(|| {
+                CodegenError::new("require_role() requer o valor esperado como 2o argumento")
+            })?;
+            let actual_go = self.gen_expr(actual, ctx)?;
+            let expected_go = self.gen_expr(expected, ctx)?;
             let msg = call
                 .args
-                .get(1)
+                .get(2)
                 .map(|m| self.gen_expr(m, ctx))
                 .transpose()?
                 .unwrap_or_else(|| "\"Acesso restrito\"".into());
             return Ok(format!(
-                "if r.Context().Value(\"role\") != {} {{\n\
+                "if {} != {} {{\n\
                  \tw.WriteHeader(403)\n\
                  \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
                  \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
@@ -794,12 +936,11 @@ impl Codegen {
                  \t}})\n\
                  \treturn\n\
                  }}",
-                role_go, msg
+                actual_go, expected_go, msg
             ));
         }
 
         // require_field("nome") ou require_field("nome", "mensagem")
-        // Gera validação de campo obrigatório no body
         if is_builtin(&call.callee, "require_field") {
             let field = call
                 .args
@@ -825,6 +966,150 @@ impl Codegen {
                  }}",
                 field_go, field_go, msg
             ));
+        }
+
+        // String built-ins
+        if let Expr::Ident(name) = call.callee.as_ref() {
+            match name.as_str() {
+                "len" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("len() requer um argumento"))?;
+                    return Ok(format!("len({})", self.gen_expr(arg, ctx)?));
+                }
+                "contains" => {
+                    let s = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("contains() requer 2 argumentos"))?;
+                    let sub = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("contains() requer 2 argumentos"))?;
+                    return Ok(format!(
+                        "strings.Contains({}, {})",
+                        self.gen_expr(s, ctx)?,
+                        self.gen_expr(sub, ctx)?
+                    ));
+                }
+                "starts_with" => {
+                    let s = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("starts_with() requer 2 argumentos"))?;
+                    let p = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("starts_with() requer 2 argumentos"))?;
+                    return Ok(format!(
+                        "strings.HasPrefix({}, {})",
+                        self.gen_expr(s, ctx)?,
+                        self.gen_expr(p, ctx)?
+                    ));
+                }
+                "replace" => {
+                    let s = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("replace() requer 3 argumentos"))?;
+                    let old = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("replace() requer 3 argumentos"))?;
+                    let new = call
+                        .args
+                        .get(2)
+                        .ok_or_else(|| CodegenError::new("replace() requer 3 argumentos"))?;
+                    return Ok(format!(
+                        "strings.Replace({}, {}, {}, -1)",
+                        self.gen_expr(s, ctx)?,
+                        self.gen_expr(old, ctx)?,
+                        self.gen_expr(new, ctx)?
+                    ));
+                }
+                "split" => {
+                    let s = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("split() requer 2 argumentos"))?;
+                    let sep = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("split() requer 2 argumentos"))?;
+                    return Ok(format!(
+                        "strings.Split({}, {})",
+                        self.gen_expr(s, ctx)?,
+                        self.gen_expr(sep, ctx)?
+                    ));
+                }
+                "trim" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("trim() requer um argumento"))?;
+                    return Ok(format!("strings.TrimSpace({})", self.gen_expr(arg, ctx)?));
+                }
+                "upper" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("upper() requer um argumento"))?;
+                    return Ok(format!("strings.ToUpper({})", self.gen_expr(arg, ctx)?));
+                }
+                "lower" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("lower() requer um argumento"))?;
+                    return Ok(format!("strings.ToLower({})", self.gen_expr(arg, ctx)?));
+                }
+                "abs" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("abs() requer um argumento"))?;
+                    return Ok(format!("math.Abs({})", self.gen_expr(arg, ctx)?));
+                }
+                "sqrt" => {
+                    let arg = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("sqrt() requer um argumento"))?;
+                    return Ok(format!("math.Sqrt({})", self.gen_expr(arg, ctx)?));
+                }
+                "min" => {
+                    let a = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("min() requer 2 argumentos"))?;
+                    let b = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("min() requer 2 argumentos"))?;
+                    return Ok(format!(
+                        "min({}, {})",
+                        self.gen_expr(a, ctx)?,
+                        self.gen_expr(b, ctx)?
+                    ));
+                }
+                "max" => {
+                    let a = call
+                        .args
+                        .first()
+                        .ok_or_else(|| CodegenError::new("max() requer 2 argumentos"))?;
+                    let b = call
+                        .args
+                        .get(1)
+                        .ok_or_else(|| CodegenError::new("max() requer 2 argumentos"))?;
+                    return Ok(format!(
+                        "max({}, {})",
+                        self.gen_expr(a, ctx)?,
+                        self.gen_expr(b, ctx)?
+                    ));
+                }
+                _ => {}
+            }
         }
 
         // alias.metodo(args)
@@ -979,6 +1264,7 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
             block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
         }
         Stmt::TryLet(t) => expr_uses_body(&t.call),
+        Stmt::Assign(a) => expr_uses_body(&a.target) || expr_uses_body(&a.value),
     }
 }
 
@@ -1511,6 +1797,46 @@ route POST /criar {
     }
 
     #[test]
+    fn test_string_math_builtins() {
+        let go = codegen(
+            r#"
+fn f() {
+    let a = len("abc")
+    let b = contains("abc", "a")
+    let c = starts_with("abc", "a")
+    let d = replace("a", "a", "b")
+    let e = trim(" x ")
+    let f = upper("a")
+    let g = lower("A")
+    let h = abs(-1.0)
+    let i = sqrt(4.0)
+    let j = min(1, 2)
+    let k = max(1, 2)
+}
+"#,
+        );
+        assert!(go.contains("len(\"abc\")"));
+        assert!(go.contains("strings.Contains"));
+        assert!(go.contains("strings.HasPrefix"));
+        assert!(go.contains("strings.Replace"));
+        assert!(go.contains("strings.TrimSpace"));
+        assert!(go.contains("strings.ToUpper"));
+        assert!(go.contains("strings.ToLower"));
+        assert!(go.contains("math.Abs"));
+        assert!(go.contains("math.Sqrt"));
+        assert!(go.contains("min(1, 2)"));
+        assert!(go.contains("max(1, 2)"));
+        assert!(go.contains("\"strings\""));
+        assert!(go.contains("\"math\""));
+    }
+
+    #[test]
+    fn test_split_builtin() {
+        let go = codegen(r#"fn f() { let x = split("a,b", ",") }"#);
+        assert!(go.contains("strings.Split"));
+    }
+
+    #[test]
     fn test_require_field() {
         let go = codegen(
             r#"
@@ -1544,13 +1870,13 @@ route POST /criar {
         let go = codegen(
             r#"
 route GET /admin {
-    require_role("master")
+    require_role("admin", "master")
     return "ok"
 }
 "#,
         );
-        assert!(go.contains("r.Context().Value(\"role\")"));
-        assert!(go.contains("\"master\""));
+        // require_role compara o 1o argumento (real) com o 2o (esperado)
+        assert!(go.contains("\"admin\" != \"master\""));
         assert!(go.contains("w.WriteHeader(403)"));
         assert!(go.contains("\"erro\": \"Acesso restrito\""));
     }
@@ -1560,13 +1886,64 @@ route GET /admin {
         let go = codegen(
             r#"
 route GET /admin {
-    require_role("admin", "Só admin mesmo")
+    require_role(role, "admin", "Só admin mesmo")
     return "ok"
 }
 "#,
         );
-        assert!(go.contains("r.Context().Value(\"role\")"));
+        assert!(go.contains("role"));
         assert!(go.contains("\"admin\""));
         assert!(go.contains("\"erro\": \"Só admin mesmo\""));
+    }
+
+    #[test]
+    fn test_route_param_typed_int() {
+        let go = codegen(
+            r#"
+route GET /api/clientes/:id<int> {
+    let x = req.params.id
+    return x
+}
+"#,
+        );
+        assert!(go.contains("_huskParam_id, _ := strconv.Atoi(chi.URLParam(r, \"id\"))"));
+        assert!(go.contains("x := _huskParam_id"));
+        assert!(go.contains("\"strconv\""));
+    }
+
+    #[test]
+    fn test_route_param_untyped_string() {
+        let go = codegen(
+            r#"
+route GET /users/:slug {
+    let s = req.params.slug
+    return s
+}
+"#,
+        );
+        // Param sem tipo continua gerando chi.URLParam
+        assert!(go.contains("chi.URLParam(r, \"slug\")"));
+        assert!(!go.contains("_huskParam_slug"));
+    }
+
+    #[test]
+    fn test_middleware_ctx_assignment() {
+        let go = codegen(
+            r#"
+middleware autenticado -> ctx {
+    ctx.role = "admin"
+    ctx.user_id = "42"
+    next()
+}
+route GET /perfil [autenticado] -> ctx {
+    let r = ctx.role
+    return r
+}
+"#,
+        );
+        // Middleware gera context.WithValue para ctx.role
+        assert!(go.contains("context.WithValue(r.Context(), \"__husk_ctx_role\""));
+        assert!(go.contains("context.WithValue(r.Context(), \"__husk_ctx_user_id\""));
+        assert!(go.contains("r = r.WithContext("));
     }
 }

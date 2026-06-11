@@ -161,11 +161,18 @@ impl Parser {
         let span = self.current_span();
         self.expect(TokenKind::Middleware)?;
         let name = self.expect_ident()?;
+        // contexto opcional: -> ctx_var
+        let ctx_var = self.parse_arrow_ident()?;
         let body = self.parse_block()?;
-        Ok(MiddlewareDef { name, body, span })
+        Ok(MiddlewareDef {
+            name,
+            ctx_var,
+            body,
+            span,
+        })
     }
 
-    // route GET /caminho [mw1, mw2] { ... }
+    // route GET /caminho [mw1, mw2] [-> ctx_var] { ... }
     fn parse_route(&mut self) -> Result<RouteDef, ParseError> {
         let span = self.current_span();
         self.expect(TokenKind::Route)?;
@@ -217,11 +224,15 @@ impl Parser {
             Vec::new()
         };
 
+        // contexto opcional: -> ctx_var (pode vir sem middlewares também)
+        let ctx_var = self.parse_arrow_ident()?;
+
         let body = self.parse_block()?;
         Ok(RouteDef {
             method,
             path,
             middlewares,
+            ctx_var,
             body,
             span,
         })
@@ -243,7 +254,16 @@ impl Parser {
                 TokenKind::Colon => {
                     self.advance();
                     let n = self.expect_ident()?;
-                    segments.push(PathSegment::Param(n));
+                    // :name<type> — tipo opcional
+                    let ty = if matches!(self.current_kind(), TokenKind::Lt) {
+                        self.advance();
+                        let t = self.parse_type()?;
+                        self.expect(TokenKind::Gt)?;
+                        Some(t)
+                    } else {
+                        None
+                    };
+                    segments.push(PathSegment::Param(n, ty));
                 }
                 TokenKind::Int(n) => {
                     let lit = n.to_string();
@@ -279,7 +299,20 @@ impl Parser {
             }
             TokenKind::Let => self.parse_let(),
             TokenKind::If => Ok(Stmt::If(self.parse_if()?)),
-            _ => Ok(Stmt::Expr(self.parse_expr()?)),
+            _ => {
+                let expr = self.parse_expr()?;
+                // ctx.field = value  — assignment
+                if matches!(self.current_kind(), TokenKind::Eq) {
+                    self.advance();
+                    let value = self.parse_expr()?;
+                    Ok(Stmt::Assign(AssignStmt {
+                        target: Box::new(expr),
+                        value,
+                    }))
+                } else {
+                    Ok(Stmt::Expr(expr))
+                }
+            }
         }
     }
 
@@ -679,6 +712,20 @@ impl Parser {
     }
 
     /// Lookahead: token no índice `pos + offset` sem avançar
+    /// Tenta parsear -> ident (arrow seguido de identificador)
+    /// Retorna Some(nome) se encontrou, None caso contrário
+    fn parse_arrow_ident(&mut self) -> Result<Option<String>, ParseError> {
+        if matches!(self.current_kind(), TokenKind::Minus) && matches!(self.peek(1), TokenKind::Gt)
+        {
+            self.advance(); // consume Minus
+            self.advance(); // consume Gt
+            let name = self.expect_ident()?;
+            Ok(Some(name))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn peek(&self, offset: usize) -> &TokenKind {
         let idx = self.pos + offset;
         if idx < self.tokens.len() {

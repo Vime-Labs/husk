@@ -61,6 +61,32 @@ O analisador semântico é a terceira fase do pipeline do Husk (após lexer e pa
 - **`require_role(role, mensagem?)`** — verifica se `req.ctx["role"]` é igual ao valor esperado. Se não, retorna `403` com JSON. Mensagem opcional (padrão: "Acesso restrito")
 - **`require_field(campo, mensagem?)`** — valida que o campo do body não está vazio. Se vazio, retorna `400` com JSON. Mensagem opcional (padrão: "Campo obrigatório: <campo>")
 
+### String built-ins
+
+Disponíveis sem import — o codegen adiciona `"strings"` automaticamente:
+
+| Função | Retorno | Go gerado |
+|--------|---------|-----------|
+| `len(s)` | `int` | `len(s)` |
+| `contains(s, sub)` | `bool` | `strings.Contains(s, sub)` |
+| `starts_with(s, prefix)` | `bool` | `strings.HasPrefix(s, prefix)` |
+| `replace(s, old, new)` | `string` | `strings.Replace(s, old, new, -1)` |
+| `split(s, sep)` | `[]string` | `strings.Split(s, sep)` |
+| `trim(s)` | `string` | `strings.TrimSpace(s)` |
+| `upper(s)` | `string` | `strings.ToUpper(s)` |
+| `lower(s)` | `string` | `strings.ToLower(s)` |
+
+### Math built-ins
+
+Disponíveis sem import — o codegen adiciona `"math"` automaticamente:
+
+| Função | Retorno | Go gerado |
+|--------|---------|-----------|
+| `abs(n)` | `float` | `math.Abs(n)` |
+| `sqrt(n)` | `float` | `math.Sqrt(n)` |
+| `min(a, b)` | `int` | `min(a, b)` |
+| `max(a, b)` | `int` | `max(a, b)` |
+
 ## Integração com CLI
 
 O analisador é executado automaticamente em todos os comandos da CLI:

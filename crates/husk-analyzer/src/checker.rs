@@ -39,11 +39,14 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
-        // require_role(role string) — verifica role no contexto da requisição
+        // require_role(actual, expected, [msg]) — compara valor com role esperada
         let _ = global.declare(
             "require_role",
             Symbol::Function(FnSignature {
-                params: vec![("role".into(), TypeInfo::String)],
+                params: vec![
+                    ("actual".into(), TypeInfo::String),
+                    ("expected".into(), TypeInfo::String),
+                ],
                 return_types: vec![],
             }),
             &Span { line: 0, col: 0 },
@@ -57,6 +60,81 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+
+        // String built-ins
+        let strings: &[(&str, &[(TypeInfo, &str)], &[TypeInfo])] = &[
+            ("len", &[(TypeInfo::String, "s")], &[TypeInfo::Int]),
+            (
+                "contains",
+                &[(TypeInfo::String, "s"), (TypeInfo::String, "sub")],
+                &[TypeInfo::Bool],
+            ),
+            (
+                "starts_with",
+                &[(TypeInfo::String, "s"), (TypeInfo::String, "prefix")],
+                &[TypeInfo::Bool],
+            ),
+            (
+                "replace",
+                &[
+                    (TypeInfo::String, "s"),
+                    (TypeInfo::String, "old"),
+                    (TypeInfo::String, "new"),
+                ],
+                &[TypeInfo::String],
+            ),
+            (
+                "split",
+                &[(TypeInfo::String, "s"), (TypeInfo::String, "sep")],
+                &[TypeInfo::List(Box::new(TypeInfo::String))],
+            ),
+            ("trim", &[(TypeInfo::String, "s")], &[TypeInfo::String]),
+            ("upper", &[(TypeInfo::String, "s")], &[TypeInfo::String]),
+            ("lower", &[(TypeInfo::String, "s")], &[TypeInfo::String]),
+        ];
+        for (name, params, returns) in strings {
+            let _ = global.declare(
+                name,
+                Symbol::Function(FnSignature {
+                    params: params
+                        .iter()
+                        .map(|(t, n)| (n.to_string(), t.clone()))
+                        .collect(),
+                    return_types: returns.to_vec(),
+                }),
+                &Span { line: 0, col: 0 },
+            );
+        }
+
+        // Math built-ins
+        let math: &[(&str, &[(TypeInfo, &str)], &[TypeInfo])] = &[
+            ("abs", &[(TypeInfo::Float, "n")], &[TypeInfo::Float]),
+            ("sqrt", &[(TypeInfo::Float, "n")], &[TypeInfo::Float]),
+            (
+                "min",
+                &[(TypeInfo::Int, "a"), (TypeInfo::Int, "b")],
+                &[TypeInfo::Int],
+            ),
+            (
+                "max",
+                &[(TypeInfo::Int, "a"), (TypeInfo::Int, "b")],
+                &[TypeInfo::Int],
+            ),
+        ];
+        for (name, params, returns) in math {
+            let _ = global.declare(
+                name,
+                Symbol::Function(FnSignature {
+                    params: params
+                        .iter()
+                        .map(|(t, n)| (n.to_string(), t.clone()))
+                        .collect(),
+                    return_types: returns.to_vec(),
+                }),
+                &Span { line: 0, col: 0 },
+            );
+        }
+
         Self {
             global,
             errors: Vec::new(),
@@ -176,9 +254,19 @@ impl Checker {
         }
 
         let mut scope = self.global.child();
+
+        // Se a rota tem contexto tipado (-> ctx), declara ctx como variável
+        if let Some(ref ctx_var) = r.ctx_var {
+            let _ = scope.declare(ctx_var, Symbol::Variable(TypeInfo::Unknown), &r.span);
+        }
+
         for seg in &r.path.segments {
-            if let PathSegment::Param(name) = seg {
-                let _ = scope.declare(name, Symbol::Variable(TypeInfo::String), &r.span);
+            if let PathSegment::Param(name, ty) = seg {
+                let param_ty = ty
+                    .as_ref()
+                    .map(|t| TypeInfo::from_ast(t))
+                    .unwrap_or(TypeInfo::String);
+                let _ = scope.declare(name, Symbol::Variable(param_ty), &r.span);
             }
         }
 
@@ -187,6 +275,12 @@ impl Checker {
 
     fn check_middleware(&mut self, m: &MiddlewareDef) {
         let mut scope = self.global.child();
+
+        // Se o middleware tem contexto tipado (-> ctx), declara ctx como variável
+        if let Some(ref ctx_var) = m.ctx_var {
+            let _ = scope.declare(ctx_var, Symbol::Variable(TypeInfo::Unknown), &m.span);
+        }
+
         self.check_block(&m.body, &mut scope, Ctx::Middleware);
     }
 
@@ -275,6 +369,11 @@ impl Checker {
                 let mut all = then_returns;
                 all.extend(else_returns);
                 all
+            }
+            Stmt::Assign(a) => {
+                self.check_expr(&a.target, scope, ctx);
+                self.check_expr(&a.value, scope, ctx);
+                vec![]
             }
             Stmt::Expr(e) => {
                 self.check_expr(e, scope, ctx);
@@ -488,6 +587,11 @@ impl Checker {
                             "'req' só está disponível dentro de rotas",
                             Span { line: 0, col: 0 },
                         ));
+                    }
+                    // O parâmetro pode ter tipo anotado (ex: :id<int>)
+                    // Busca no escopo o tipo declarado em check_route
+                    if let Some(Symbol::Variable(ty)) = scope.lookup(field) {
+                        return ty.clone();
                     }
                     return TypeInfo::String;
                 }
