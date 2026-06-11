@@ -58,6 +58,7 @@ O analisador semântico é a terceira fase do pipeline do Husk (após lexer e pa
 
 - **`set_ctx(chave, valor)`** — disponível em middlewares e rotas para armazenar dados no contexto da requisição
 - **`parse_int(s)`** — converte string para inteiro, retorna `(int, error)`. Use com `?`: `parse_int(req.params.id)?`
+- **`require_role(role, mensagem?)`** — verifica se `req.ctx["role"]` é igual ao valor esperado. Se não, retorna `403` com JSON. Mensagem opcional (padrão: "Acesso restrito")
 
 ## Integração com CLI
 

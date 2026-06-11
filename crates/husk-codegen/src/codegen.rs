@@ -178,6 +178,9 @@ impl Codegen {
                 if is_builtin(&call.callee, "parse_int") {
                     self.go_imports.insert("strconv".into());
                 }
+                if is_builtin(&call.callee, "require_role") {
+                    self.go_imports.insert("encoding/json".into());
+                }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
                 }
@@ -375,7 +378,9 @@ impl Codegen {
                 } else {
                     ":="
                 };
-                if l.name != "_" { declared.insert(l.name.clone()); }
+                if l.name != "_" {
+                    declared.insert(l.name.clone());
+                }
                 let expr = self.gen_expr(&l.value, ctx)?;
                 Ok(format!("{} {} {}", l.name, op, expr))
             }
@@ -468,10 +473,14 @@ impl Codegen {
                     self.gen_map_lit(m, Ctx::Route)?
                 ))
             }
-            other => Ok(format!(
-                "fmt.Fprint(w, {})",
-                self.gen_expr(other, Ctx::Route)?
-            )),
+            other => {
+                // Qualquer expressão em rota é serializada como JSON automaticamente
+                // Use text() para texto puro
+                Ok(format!(
+                    "w.Header().Set(\"Content-Type\", \"application/json\")\njson.NewEncoder(w).Encode({})",
+                    self.gen_expr(other, Ctx::Route)?
+                ))
+            }
         }
     }
 
@@ -725,6 +734,35 @@ impl Codegen {
             return Ok(format!("strconv.Atoi({})", arg_go));
         }
 
+        // require_role("admin") ou require_role("admin", "mensagem")
+        // Gera: if r.Context().Value("role") != "admin" { w.WriteHeader(403); json...; return }
+        if is_builtin(&call.callee, "require_role") {
+            let role = call
+                .args
+                .first()
+                .ok_or_else(|| CodegenError::new("require_role() requer um nome de role"))?;
+            let role_go = self.gen_expr(role, ctx)?;
+            let msg = call
+                .args
+                .get(1)
+                .map(|m| self.gen_expr(m, ctx))
+                .transpose()?
+                .unwrap_or_else(|| "\"Acesso restrito\"".into());
+            return Ok(format!(
+                "if r.Context().Value(\"role\") != {} {{\n\
+                 \tw.WriteHeader(403)\n\
+                 \tw.Header().Set(\"Content-Type\", \"application/json\")\n\
+                 \tjson.NewEncoder(w).Encode(map[string]interface{{}}{{\
+\
+                 \t\t\"erro\": {},\
+\
+                 \t}})\n\
+                 \treturn\n\
+                 }}",
+                role_go, msg
+            ));
+        }
+
         // alias.metodo(args)
         // stdlib: env.get(x) → env_get(x)
         // usuário: usuarios.listar() → listar()
@@ -914,7 +952,7 @@ route GET /hello {
         );
         assert!(go.contains("func greeting() string {"));
         assert!(go.contains("r.Get(\"/hello\""));
-        assert!(go.contains("fmt.Fprint(w, greeting())"));
+        assert!(go.contains("json.NewEncoder(w).Encode(greeting())"));
     }
 
     #[test]
@@ -1346,5 +1384,36 @@ route GET /convert {
         assert!(go.contains("strconv.Atoi(\"42\")"));
         assert!(go.contains("\"strconv\""));
         assert!(go.contains("__try1_val, __try1_err := strconv.Atoi(\"42\")"));
+    }
+
+    #[test]
+    fn test_require_role() {
+        let go = codegen(
+            r#"
+route GET /admin {
+    require_role("master")
+    return "ok"
+}
+"#,
+        );
+        assert!(go.contains("r.Context().Value(\"role\")"));
+        assert!(go.contains("\"master\""));
+        assert!(go.contains("w.WriteHeader(403)"));
+        assert!(go.contains("\"erro\": \"Acesso restrito\""));
+    }
+
+    #[test]
+    fn test_require_role_com_mensagem() {
+        let go = codegen(
+            r#"
+route GET /admin {
+    require_role("admin", "Só admin mesmo")
+    return "ok"
+}
+"#,
+        );
+        assert!(go.contains("r.Context().Value(\"role\")"));
+        assert!(go.contains("\"admin\""));
+        assert!(go.contains("\"erro\": \"Só admin mesmo\""));
     }
 }

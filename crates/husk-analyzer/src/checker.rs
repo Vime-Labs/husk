@@ -39,6 +39,15 @@ impl Checker {
             }),
             &Span { line: 0, col: 0 },
         );
+        // require_role(role string) — verifica role no contexto da requisição
+        let _ = global.declare(
+            "require_role",
+            Symbol::Function(FnSignature {
+                params: vec![("role".into(), TypeInfo::String)],
+                return_types: vec![],
+            }),
+            &Span { line: 0, col: 0 },
+        );
         Self {
             global,
             errors: Vec::new(),

@@ -38,13 +38,17 @@ O parâmetro `:id` é mapeado para `{id}` no chi e pode ser lido via `req.params
 
 ### Retorno em JSON
 
+Toda expressão retornada em rota é serializada como JSON automaticamente:
+
 ```husk
 route GET /ping {
-    return json({ status: "ok" })
+    return { status: "ok" }
 }
 ```
 
-Gera os headers `Content-Type: application/json` automaticamente e serializa o objeto.
+Gera os headers `Content-Type: application/json` automaticamente.
+
+Objetos literais, structs, variáveis — tudo vira JSON sem precisar de `json()`.
 
 ### Retorno com status HTTP
 
@@ -54,11 +58,15 @@ route DELETE /item {
 }
 
 route POST /item {
-    return status(400, json({ erro: "campo ausente" }))
+    return status(400, { erro: "campo ausente" })
 }
 ```
 
+O body do `status()` também é JSON automático — não precisa de `json()`.
+
 ### Retorno de texto simples
+
+Use `text()` para resposta em texto puro (única exceção ao JSON automático):
 
 ```husk
 route GET /healthz {
@@ -70,12 +78,11 @@ route GET /healthz {
 
 | Husk                    | Comportamento                              |
 |-------------------------|--------------------------------------------|
-| `return expr`           | escreve o valor como texto (`fmt.Fprint`)  |
-| `return json({...})`    | serializa como JSON com header correto     |
-| `return text("...")`    | escreve texto puro                         |
+| `return expr`           | serializa qualquer expressão como JSON     |
+| `return { ... }`        | serializa como JSON (atalho para expr)     |
+| `return text("...")`    | escreve texto puro (única exceção)         |
 | `return status(N)`      | define o status HTTP sem corpo             |
-| `return status(N, {...})` | define status e serializa objeto como JSON |
-| `return { ... }`        | serializa como JSON automaticamente (v1.0) |
+| `return status(N, expr)` | define status e serializa body como JSON  |
 
 ## Variáveis implícitas
 
@@ -156,6 +163,34 @@ route GET /admin [autenticado, admin] {
 ```
 
 Ver [MIDDLEWARES.md](MIDDLEWARES.md) para como definir middlewares.
+
+### Verificação de role com `require_role`
+
+Para rotas que exigem uma role específica, use `require_role()` no corpo da rota:
+
+```husk
+route GET /admin [autenticado] {
+    require_role("master")
+    // só chega aqui se for master
+    return "painel admin"
+}
+```
+
+É equivalente a:
+
+```husk
+if req.ctx["role"] != "master" {
+    return status(403, { erro: "Acesso restrito" })
+}
+```
+
+Mensagem customizada:
+
+```husk
+require_role("admin", "Só administradores")
+```
+
+> `require_role` só funciona dentro de rotas e middlewares (contexto com `req`).
 
 ## Notas
 
