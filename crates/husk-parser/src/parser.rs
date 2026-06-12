@@ -923,6 +923,10 @@ impl Parser {
                 self.advance();
                 Ok(s)
             }
+            TokenKind::Str(s) => {
+                self.advance();
+                Ok(s)
+            }
             _ => {
                 if let Some(name) = self.current_kind().keyword_name() {
                     self.advance();
