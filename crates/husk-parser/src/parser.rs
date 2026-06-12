@@ -906,7 +906,7 @@ impl Parser {
     fn parse_field_list(&mut self) -> Result<Vec<(String, Expr)>, ParseError> {
         let mut fields = Vec::new();
         while !matches!(self.current_kind(), TokenKind::RBrace | TokenKind::Eof) {
-            let key = self.expect_ident()?;
+            let key = self.parse_map_key()?;
             self.expect(TokenKind::Colon)?;
             let val = self.parse_expr()?;
             fields.push((key, val));
@@ -915,6 +915,26 @@ impl Parser {
             }
         }
         Ok(fields)
+    }
+
+    fn parse_map_key(&mut self) -> Result<String, ParseError> {
+        match self.current_kind().clone() {
+            TokenKind::Ident(s) => {
+                self.advance();
+                Ok(s)
+            }
+            _ => {
+                if let Some(name) = self.current_kind().keyword_name() {
+                    self.advance();
+                    Ok(name.to_string())
+                } else {
+                    Err(ParseError::new(
+                        format!("esperado chave de mapa, encontrado {:?}", self.current_kind()),
+                        self.current_span(),
+                    ))
+                }
+            }
+        }
     }
 
     fn parse_type(&mut self) -> Result<Type, ParseError> {
