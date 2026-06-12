@@ -24,6 +24,7 @@ const STDLIB_CRYPTO: &str = include_str!("stdlib/crypto.go");
 const STDLIB_JWT: &str = include_str!("stdlib/jwt.go");
 const STDLIB_LOG: &str = include_str!("stdlib/log.go");
 const STDLIB_HTTP: &str = include_str!("stdlib/http.go");
+const STDLIB_S3: &str = include_str!("stdlib/s3.go");
 const MIGRATE_GO: &str = include_str!("stdlib/migrate.go");
 const VENDOR_HUSK: &str = ".vendor.husk";
 
@@ -85,6 +86,9 @@ impl StdlibDeps {
         if self.has("husk/jwt") {
             reqs.push("github.com/golang-jwt/jwt/v5 v5.2.2".to_string());
         }
+        if self.has("husk/s3") {
+            reqs.push("github.com/minio/minio-go/v7 v7.0.88".to_string());
+        }
         reqs.iter().map(|r| format!("\t{r}\n")).collect::<String>()
     }
 
@@ -106,6 +110,9 @@ impl StdlibDeps {
         }
         if self.has("husk/http") {
             write_file(&dir.join("husk_stdlib_http.go"), STDLIB_HTTP);
+        }
+        if self.has("husk/s3") {
+            write_file(&dir.join("husk_stdlib_s3.go"), STDLIB_S3);
         }
     }
 }
@@ -264,16 +271,16 @@ fn cmd_fmt(args: &[String]) {
 fn cmd_add(args: &[String]) {
     let module = args.get(2).unwrap_or_else(|| {
         eprintln!("{RED}erro:{RESET} informe o módulo: husk add <modulo>");
-        eprintln!("  módulos disponíveis: env, log, postgres, crypto, jwt, http");
+        eprintln!("  módulos disponíveis: env, log, postgres, crypto, jwt, http, s3");
         process::exit(1);
     });
 
-    let available = ["env", "log", "postgres", "crypto", "jwt", "http"];
+    let available = ["env", "log", "postgres", "crypto", "jwt", "http", "s3"];
     if !available.contains(&module.as_str()) {
         eprintln!(
             "{RED}erro:{RESET} módulo desconhecido '{module}'",
         );
-        eprintln!("  disponíveis: env, log, postgres, crypto, jwt, http");
+        eprintln!("  disponíveis: env, log, postgres, crypto, jwt, http, s3");
         process::exit(1);
     }
 

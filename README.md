@@ -130,9 +130,10 @@ Os packages são incluídos automaticamente em tempo de compilação — sem alt
 | `husk/env`      | Variáveis de ambiente, `.env` loading         |
 | `husk/postgres` | PostgreSQL via pgx (UUID→string automático)   |
 | `husk/crypto`   | bcrypt + HMAC-SHA256                          |
-| `husk/jwt`      | Criação e verificação de JWT                  |
+| `husk/jwt`      | Criação e verificação de JWT (HS256 + RS256)  |
 | `husk/log`      | Logging com níveis                            |
 | `husk/http`     | Cliente HTTP com suporte a multipart          |
+| `husk/s3`       | Object storage S3 (minio-go, Signature V4)    |
 
 ## Estado
 

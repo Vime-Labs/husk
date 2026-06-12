@@ -155,8 +155,9 @@ Geração e verificação de JSON Web Tokens com HMAC-SHA256.
 
 | Função                       | Retorno           | Descrição                                                        |
 |------------------------------|-------------------|------------------------------------------------------------------|
-| `jwt.sign(payload, secret)`  | `(string, error)` | Cria um JWT assinado. Adiciona `exp` de 24h se não informado     |
-| `jwt.verify(token, secret)`  | `(map, error)`    | Verifica a assinatura e retorna os claims como mapa              |
+| `jwt.sign(payload, secret)`  | `(string, error)` | Cria um JWT com HMAC-SHA256 (simétrico). Adiciona `exp` de 24h se não informado |
+| `jwt.sign_rs256(payload, private_key_pem)` | `(string, error)` | Cria um JWT com RSA-SHA256 (assimétrico). `private_key_pem` é a chave privada em formato PEM |
+| `jwt.verify(token, key)`     | `(map, error)`    | Verifica a assinatura e retorna os claims. Auto-detetca o algoritmo: `HS*` → key é secret simétrico, `RS*` → key é chave pública PEM |
 
 ```husk
 import "husk/jwt"  as jwt
@@ -187,7 +188,49 @@ route GET /perfil {
 }
 ```
 
-### husk/log
+### husk/s3
+
+Operações em object storage compatível com S3 (AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, etc.). Usa a biblioteca [minio-go](https://github.com/minio/minio-go) que trata do Signature V4 automaticamente.
+
+| Função | Retorno | Descrição |
+|--------|---------|----------|
+| `s3.get_object(endpoint, access_key, secret_key, region, bucket, key)` | `([]byte, error)` | Descarrega um objeto do S3 |
+| `s3.put_object(endpoint, access_key, secret_key, region, bucket, key, data)` | `(string, error)` | Envia um objeto para o S3. Retorna o ETag |
+| `s3.delete_object(endpoint, access_key, secret_key, region, bucket, key)` | `(error)` | Remove um objeto do S3 |
+| `s3.list_objects(endpoint, access_key, secret_key, region, bucket, prefix)` | `([map], error)` | Lista objetos com prefixo opcional. Cada mapa contém `key`, `size`, `etag`, `last_modified` |
+| `s3.presigned_url(endpoint, access_key, secret_key, region, bucket, key, expiry)` | `(string, error)` | Gera URL temporário para **download** (GET) |
+| `s3.presigned_put_url(endpoint, access_key, secret_key, region, bucket, key, expiry)` | `(string, error)` | Gera URL temporário para **upload direto** (PUT) — browser envia para o S3 sem passar pelo backend |
+
+`region` pode ser vazio (`""`) para usar `us-east-1` como fallback. Para Cloudflare R2, `region` é ignorado.
+
+```husk
+import "husk/s3" as s3
+import "husk/env" as env
+
+let endpoint = env.require("S3_ENDPOINT")
+let ak      = env.require("S3_ACCESS_KEY")
+let sk      = env.require("S3_SECRET_KEY")
+let bucket  = env.require("S3_BUCKET")
+
+// Upload de ficheiro
+let etag, err = s3.put_object(endpoint, ak, sk, "", bucket, "fotos/gato.jpg", dados)
+if err != nil { return status(500, err.message) }
+
+// Descarregar
+let dados, err = s3.get_object(endpoint, ak, sk, "", bucket, "fotos/gato.jpg")
+
+// Listar
+let objetos, err = s3.list_objects(endpoint, ak, sk, "", bucket, "fotos/")
+for obj in objetos {
+    println(key: obj.key, size: obj.size)
+}
+
+// URL temporário para download (1 hora)
+let url, err = s3.presigned_url(endpoint, ak, sk, "", bucket, "fotos/gato.jpg", 3600)
+
+// URL temporário para upload direto (30 min) — browser faz PUT sem backend
+let upload_url, err = s3.presigned_put_url(endpoint, ak, sk, "", bucket, "uploads/anexo.pdf", 1800)
+```
 
 Logging com níveis usando o pacote `log` do Go.
 
