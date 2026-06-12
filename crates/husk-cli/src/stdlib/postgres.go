@@ -45,7 +45,7 @@ func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error)
 	}
 	defer rows.Close()
 
-	var results []map[string]interface{}
+	results := []map[string]interface{}{}
 	for rows.Next() {
 		values, err := rows.Values()
 		if err != nil {
