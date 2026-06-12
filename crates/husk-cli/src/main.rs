@@ -22,6 +22,7 @@ const STDLIB_POSTGRES: &str = include_str!("stdlib/postgres.go");
 const STDLIB_CRYPTO: &str = include_str!("stdlib/crypto.go");
 const STDLIB_JWT: &str = include_str!("stdlib/jwt.go");
 const STDLIB_LOG: &str = include_str!("stdlib/log.go");
+const STDLIB_HTTP: &str = include_str!("stdlib/http.go");
 const MIGRATE_GO: &str = include_str!("stdlib/migrate.go");
 
 struct StdlibDeps {
@@ -86,6 +87,9 @@ impl StdlibDeps {
         }
         if self.has("husk/log") {
             write_file(&dir.join("husk_stdlib_log.go"), STDLIB_LOG);
+        }
+        if self.has("husk/http") {
+            write_file(&dir.join("husk_stdlib_http.go"), STDLIB_HTTP);
         }
     }
 }
@@ -240,16 +244,16 @@ fn cmd_fmt(args: &[String]) {
 fn cmd_add(args: &[String]) {
     let module = args.get(2).unwrap_or_else(|| {
         eprintln!("{RED}erro:{RESET} informe o módulo: husk add <modulo>");
-        eprintln!("  módulos disponíveis: env, log, postgres, crypto, jwt");
+        eprintln!("  módulos disponíveis: env, log, postgres, crypto, jwt, http");
         process::exit(1);
     });
 
-    let available = ["env", "log", "postgres", "crypto", "jwt"];
+    let available = ["env", "log", "postgres", "crypto", "jwt", "http"];
     if !available.contains(&module.as_str()) {
         eprintln!(
             "{RED}erro:{RESET} módulo desconhecido '{module}'",
         );
-        eprintln!("  disponíveis: env, log, postgres, crypto, jwt");
+        eprintln!("  disponíveis: env, log, postgres, crypto, jwt, http");
         process::exit(1);
     }
 
