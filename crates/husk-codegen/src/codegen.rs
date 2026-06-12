@@ -193,6 +193,7 @@ func __husk_to_bool(v interface{}) bool {
     fn collect_go_imports(&mut self, program: &Program) {
         self.go_imports.borrow_mut().insert("context".into());
         self.go_imports.borrow_mut().insert("fmt".into());
+        self.go_imports.borrow_mut().insert("io".into());
         self.go_imports.borrow_mut().insert("log".into());
         self.go_imports.borrow_mut().insert("net/http".into());
         self.go_imports.borrow_mut().insert("os/signal".into());
@@ -972,8 +973,10 @@ func __husk_to_bool(v interface{}) bool {
         }
 
         if block_uses_body(&route.body) {
+            s.push_str("\t\t_huskBodyRawBytes, _ := io.ReadAll(r.Body)\n");
             s.push_str("\t\tvar _huskBody map[string]interface{}\n");
-            s.push_str("\t\tjson.NewDecoder(r.Body).Decode(&_huskBody)\n");
+            s.push_str("\t\tjson.Unmarshal(_huskBodyRawBytes, &_huskBody)\n");
+            s.push_str("\t\t_huskBodyRaw := string(_huskBodyRawBytes)\n");
         }
         s.push_str(&self.gen_block(&route.body, Ctx::Route, 2)?);
         s.push_str("\t})\n");
@@ -1494,6 +1497,9 @@ func __husk_to_bool(v interface{}) bool {
             if name == "req" {
                 if field == "body" {
                     return Ok("_huskBody".into());
+                }
+                if field == "body_raw" {
+                    return Ok("_huskBodyRaw".into());
                 }
                 // req.method, req.url, etc. — acesso direto ao r
                 return Ok(format!("r.{}", capitalize(field)));
@@ -2084,7 +2090,7 @@ fn expr_uses_body(expr: &Expr) -> bool {
         Expr::Index(obj, _) => {
             if let Expr::FieldAccess(inner, field) = obj.as_ref() {
                 if let Expr::Ident(name) = inner.as_ref() {
-                    return name == "req" && field == "body";
+                    return name == "req" && (field == "body" || field == "body_raw");
                 }
             }
             false
@@ -2099,9 +2105,9 @@ fn expr_uses_body(expr: &Expr) -> bool {
             expr_uses_body(&c.callee) || c.args.iter().any(expr_uses_body)
         }
         Expr::FieldAccess(e, field) => {
-            // req.body (sem index) também conta como uso do body
+            // req.body (sem index) ou req.body_raw também conta como uso do body
             if let Expr::Ident(name) = e.as_ref() {
-                if name == "req" && field == "body" {
+                if name == "req" && (field == "body" || field == "body_raw") {
                     return true;
                 }
             }
@@ -2343,7 +2349,8 @@ route POST /login {
 "#,
         );
         assert!(go.contains("var _huskBody map[string]interface{}"));
-        assert!(go.contains("json.NewDecoder(r.Body).Decode(&_huskBody)"));
+        assert!(go.contains("io.ReadAll(r.Body)"));
+        assert!(go.contains("json.Unmarshal(_huskBodyRawBytes, &_huskBody)"));
         assert!(go.contains("_huskBody[\"email\"]"));
         assert!(go.contains("_huskBody[\"senha\"]"));
         assert!(go.contains("\"encoding/json\""));
@@ -3033,7 +3040,8 @@ route POST /usuarios {
 }
 "#,
         );
-        assert!(go.contains("json.NewDecoder(r.Body).Decode"));
+        assert!(go.contains("io.ReadAll(r.Body)"));
+        assert!(go.contains("json.Unmarshal"));
         assert!(go.contains("__validate_1"));
         assert!(go.contains("w.WriteHeader(400)"));
         assert!(go.contains("w.WriteHeader(422)"));
