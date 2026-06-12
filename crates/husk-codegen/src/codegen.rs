@@ -223,10 +223,15 @@ impl Codegen {
             }
         }
 
-        // Schema definitions: check for email validator → need regexp
+        // Schema/Model definitions: check for email validator → need regexp
         for item in &program.items {
-            if let Item::SchemaDef(s) = item {
-                for field in &s.fields {
+            let fields: Option<&Vec<SchemaField>> = match item {
+                Item::SchemaDef(s) => Some(&s.fields),
+                Item::ModelDef(m) => Some(&m.fields),
+                _ => None,
+            };
+            if let Some(fields) = fields {
+                for field in fields {
                     for v in &field.validators {
                         if matches!(v, Validator::Email) {
                             self.go_imports.borrow_mut().insert("regexp".into());
@@ -432,8 +437,163 @@ impl Codegen {
         Ok(out)
     }
 
-    /// schema Nome { campo: tipo [required] [email] [min(N)] [max(N)] }
-    /// Gera struct Go + Validate() method.
+    /// model Nome { table: "tabela" fields: { campo: tipo [validadores] } }
+    /// Gera struct Go + Validate() + CRUD methods.
+    fn gen_model_def(&self, m: &ModelDef) -> Result<String, CodegenError> {
+        let model = &m.name;
+        let table = &m.table;
+        let mut out = format!("type {} struct {{\n  ID int64 `json:\"id\"`\n", model);
+        for field in &m.fields {
+            let cap = capitalize(&field.name);
+            out.push_str(&format!("  {} {} `json:\"{}\"`\n", cap, go_type(&field.ty), field.name));
+        }
+        out.push_str("}\n\n");
+
+        // Validate() method
+        out.push_str(&format!("func (m *{}) Validate() map[string]string {{\n", model));
+        out.push_str("  errs := map[string]string{}\n");
+        for field in &m.fields {
+            let cap = capitalize(&field.name);
+            for v in &field.validators {
+                match v {
+                    Validator::Required => {
+                        match &field.ty {
+                            Type::String => {
+                                out.push_str(&format!("  if m.{} == \"\" {{\n", cap));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} é obrigatório\"\n", field.name, field.name));
+                                out.push_str("  }\n");
+                            }
+                            Type::Int => {
+                                out.push_str(&format!("  if m.{} == 0 {{\n", cap));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} é obrigatório\"\n", field.name, field.name));
+                                out.push_str("  }\n");
+                            }
+                            Type::Float => {
+                                out.push_str(&format!("  if m.{} == 0 {{\n", cap));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} é obrigatório\"\n", field.name, field.name));
+                                out.push_str("  }\n");
+                            }
+                            _ => {}
+                        }
+                    }
+                    Validator::Email => {
+                        out.push_str(&format!("  if !__emailRegex.MatchString(m.{}) {{\n", cap));
+                        out.push_str(&format!("    errs[\"{}\"] = \"{} inválido\"\n", field.name, field.name));
+                        out.push_str("  }\n");
+                    }
+                    Validator::Min(n) => {
+                        match &field.ty {
+                            Type::String => {
+                                out.push_str(&format!("  if len(m.{}) < {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ter no mínimo {} caracteres\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            Type::Int => {
+                                out.push_str(&format!("  if m.{} < {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ser no mínimo {}\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            Type::Float => {
+                                out.push_str(&format!("  if m.{} < {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ser no mínimo {}\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            _ => {}
+                        }
+                    }
+                    Validator::Max(n) => {
+                        match &field.ty {
+                            Type::String => {
+                                out.push_str(&format!("  if len(m.{}) > {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ter no máximo {} caracteres\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            Type::Int => {
+                                out.push_str(&format!("  if m.{} > {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ser no máximo {}\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            Type::Float => {
+                                out.push_str(&format!("  if m.{} > {} {{\n", cap, n));
+                                out.push_str(&format!("    errs[\"{}\"] = \"{} deve ser no máximo {}\"\n", field.name, field.name, n));
+                                out.push_str("  }\n");
+                            }
+                            _ => {}
+                        }
+                    }
+                    Validator::Unique => {}
+                }
+            }
+        }
+        out.push_str("  if len(errs) == 0 { return nil }\n");
+        out.push_str("  return errs\n");
+        out.push_str("}\n\n");
+
+        // Column names (without id, since id is auto-generated)
+        let cols: Vec<&str> = m.fields.iter().map(|f| f.name.as_str()).collect();
+        let col_list = cols.join(", ");
+        let placeholders: Vec<String> = (1..=m.fields.len()).map(|i| format!("${}", i)).collect();
+        let ph_list = placeholders.join(", ");
+        let scan_fields: Vec<String> = m.fields.iter().map(|f| format!("&m.{}", capitalize(&f.name))).collect();
+        let scan_list = scan_fields.join(", ");
+
+        // Find(id)
+        out.push_str(&format!("func {}Find(db *sql.DB, id int64) (*{}, error) {{\n", model, model));
+        out.push_str(&format!("  var m {}\n", model));
+        out.push_str(&format!("  err := db.QueryRow(\"SELECT id,{} FROM {} WHERE id=$1\", id).Scan(&m.ID, {})\n", col_list, table, scan_list));
+        out.push_str("  if err != nil {\n    return nil, err\n  }\n");
+        out.push_str(&format!("  return &m, nil\n"));
+        out.push_str("}\n\n");
+
+        // Where(field, value)
+        out.push_str(&format!("func {}Where(db *sql.DB, field string, value interface{{}}) ([]{}, error) {{\n", model, model));
+        out.push_str(&format!("  query := fmt.Sprintf(\"SELECT id,{} FROM {} WHERE %%s = $1\", field)\n", col_list, table));
+        out.push_str("  rows, err := db.Query(query, value)\n");
+        out.push_str("  if err != nil {\n    return nil, err\n  }\n");
+        out.push_str("  defer rows.Close()\n");
+        out.push_str(&format!("  var result []{}\n", model));
+        out.push_str("  for rows.Next() {\n");
+        out.push_str(&format!("    var m {}\n", model));
+        out.push_str(&format!("    if err := rows.Scan(&m.ID, {}); err != nil {{\n", scan_list));
+        out.push_str("      return nil, err\n    }\n");
+        out.push_str("    result = append(result, m)\n");
+        out.push_str("  }\n");
+        out.push_str("  return result, nil\n");
+        out.push_str("}\n\n");
+
+        // Insert()
+        let insert_args: Vec<String> = m.fields.iter().map(|f| format!("m.{}", capitalize(&f.name))).collect();
+        let insert_args_str = insert_args.join(", ");
+        out.push_str(&format!("func (m *{}) Insert(db *sql.DB) error {{\n", model));
+        out.push_str(&format!("  _, err := db.Exec(\"INSERT INTO {} ({}) VALUES ({})\", {})\n",
+            table, col_list, ph_list, insert_args_str));
+        out.push_str("  return err\n");
+        out.push_str("}\n\n");
+
+        // Update()
+        let sets: Vec<String> = m.fields.iter().enumerate().map(|(i, f)| format!("{} = ${}", f.name, i + 1)).collect();
+        let update_args: Vec<String> = m.fields.iter().map(|f| format!("m.{}", capitalize(&f.name))).collect();
+        let update_args_str = update_args.join(", ");
+        out.push_str(&format!("func (m *{}) Update(db *sql.DB) error {{\n", model));
+        out.push_str(&format!("  _, err := db.Exec(\"UPDATE {} SET {} WHERE id=${}\", {}, m.ID)\n",
+            table, sets.join(", "), m.fields.len() + 1, update_args_str));
+        out.push_str("  return err\n");
+        out.push_str("}\n\n");
+
+        // Delete()
+        out.push_str(&format!("func (m *{}) Delete(db *sql.DB) error {{\n", model));
+        out.push_str(&format!("  _, err := db.Exec(\"DELETE FROM {} WHERE id=$1\", m.ID)\n", table));
+        out.push_str("  return err\n");
+        out.push_str("}\n\n");
+
+        // Ensure database/sql import is present
+        self.go_imports.borrow_mut().insert("database/sql".into());
+        // fmt is needed for Where's Sprintf
+        self.go_imports.borrow_mut().insert("fmt".into());
+
+        Ok(out)
+    }
+
     fn gen_schema_def(&self, s: &SchemaDef) -> Result<String, CodegenError> {
         let mut out = format!("type {} struct {{\n", s.name);
         for field in &s.fields {
@@ -454,7 +614,7 @@ impl Codegen {
 
         for field in &s.fields {
             let cap_name = capitalize(&field.name);
-            let go_ty = go_type(&field.ty);
+            let _go_ty = go_type(&field.ty);
             for v in &field.validators {
                 match v {
                     Validator::Required => {

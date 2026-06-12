@@ -258,8 +258,7 @@ impl Checker {
                 }
                 Item::RouteDef(_) => {} // rotas são verificadas na segunda passada
                 Item::CorsDef(_) => {}
-                Item::SchemaDef(_) => {}
-                Item::ModelDef(_) => {}
+                _ => {}
             }
         }
     }
