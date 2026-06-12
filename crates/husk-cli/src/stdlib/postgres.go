@@ -2,12 +2,34 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func toUUIDString(b [16]byte) string {
+	var buf [36]byte
+	hex.Encode(buf[0:8], b[0:4])
+	buf[8] = '-'
+	hex.Encode(buf[9:13], b[4:6])
+	buf[13] = '-'
+	hex.Encode(buf[14:18], b[6:8])
+	buf[18] = '-'
+	hex.Encode(buf[19:23], b[8:10])
+	buf[23] = '-'
+	hex.Encode(buf[24:36], b[10:16])
+	return string(buf[:])
+}
+
+func convertPgValue(v interface{}) interface{} {
+	if b, ok := v.([16]byte); ok {
+		return toUUIDString(b)
+	}
+	return v
+}
 
 var pgPool *pgxpool.Pool
 var pgOnce sync.Once
@@ -53,7 +75,7 @@ func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error)
 		}
 		row := make(map[string]interface{})
 		for i, col := range rows.FieldDescriptions() {
-			row[string(col.Name)] = values[i]
+			row[string(col.Name)] = convertPgValue(values[i])
 		}
 		results = append(results, row)
 	}
