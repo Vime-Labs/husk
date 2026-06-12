@@ -150,6 +150,39 @@ impl Codegen {
             file.push_str("var __emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$`)\n\n");
         }
 
+        // Helpers de conversão segura para map[string]interface{}
+        file.push_str(r#"func __husk_to_string(v interface{}) string {
+	if v == nil { return "" }
+	if s, ok := v.(string); ok { return s }
+	return fmt.Sprintf("%v", v)
+}
+func __husk_to_int(v interface{}) int {
+	if v == nil { return 0 }
+	switch n := v.(type) {
+	case int: return n
+	case int64: return int(n)
+	case float64: return int(n)
+	}
+	return 0
+}
+func __husk_to_float(v interface{}) float64 {
+	if v == nil { return 0 }
+	switch n := v.(type) {
+	case float64: return n
+	case float32: return float64(n)
+	case int: return float64(n)
+	case int64: return float64(n)
+	}
+	return 0
+}
+func __husk_to_bool(v interface{}) bool {
+	if v == nil { return false }
+	if b, ok := v.(bool); ok { return b }
+	return false
+}
+
+"#);
+
         file.push_str(&body);
 
         Ok(file)
@@ -1497,7 +1530,7 @@ impl Codegen {
                     return Ok(match field.as_str() {
                         "headers" => format!("r.Header.Get({})", key),
                         "query" => format!("r.URL.Query().Get({})", key),
-                        "body" => format!("fmt.Sprintf(\"%v\", _huskBody[{}])", key),
+                        "body" => format!("__husk_to_string(_huskBody[{}])", key),
                         "ctx" => format!("r.Context().Value({})", key),
                         _ => format!("r.{}[{}]", capitalize(field), key),
                     });
@@ -1894,13 +1927,13 @@ impl Codegen {
                     // spread expands only remaining params (after already-provided args)
                     let remaining = &params[out.len()..];
                     for (pname, pty) in remaining.iter() {
-                        let cast = match pty {
-                            Type::Int => ".(int)",
-                            Type::Float => ".(float64)",
-                            Type::Bool => ".(bool)",
-                            _ => ".(string)",
+                        let helper = match pty {
+                            Type::Int => "__husk_to_int",
+                            Type::Float => "__husk_to_float",
+                            Type::Bool => "__husk_to_bool",
+                            _ => "__husk_to_string",
                         };
-                        out.push(format!("{}[\"{}\"]{}", map_expr, pname, cast));
+                        out.push(format!("{}({}[\"{}\"])", helper, map_expr, pname));
                     }
                 }
             } else {

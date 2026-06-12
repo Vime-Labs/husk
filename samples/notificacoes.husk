@@ -1,0 +1,64 @@
+import "husk/env" as env
+import "husk/log" as log
+
+schema NotificacaoSchema {
+    tipo:    string required
+    destino: string required email()
+    assunto: string required max(200)
+    corpo:   string required max(5000)
+}
+
+struct EmailConfig {
+    smtp_host  string
+    smtp_port  int
+    usuario    string
+    senha      string
+}
+
+fn carregar_config() EmailConfig {
+    return EmailConfig{
+        smtp_host: env.get("SMTP_HOST"),
+        smtp_port: env.get("SMTP_PORT"),
+        usuario:   env.get("SMTP_USER"),
+        senha:     env.get("SMTP_PASS")
+    }
+}
+
+fn enviar_email(destino string, assunto string, corpo string) ?string {
+    let config = carregar_config()
+    if destino == "" {
+        return erro("destino obrigatorio")
+    }
+    let resultado = smtp.enviar(
+        config.smtp_host,
+        config.smtp_port,
+        config.usuario,
+        config.senha,
+        destino,
+        assunto,
+        corpo
+    )? 502 "Falha no envio de email"
+    return resultado
+}
+
+fn enviar_boas_vindas(email string, nome string) ?string {
+    let assunto = "Bem-vindo, " + nome
+    let corpo = "Ola " + nome + ",\n\nSeu cadastro foi realizado com sucesso."
+    return enviar_email(email, assunto, corpo)?
+}
+
+route POST /notificacoes/enviar [auth.jwt, timeout=30s] -> ctx {
+    let body = validate(req.body, NotificacaoSchema)?
+    let resultado = enviar_email(body.destino, body.assunto, body.corpo)? 500 break
+    log.info("notificacao enviada para " + body.destino)
+    return json({ status: "enviado", id: resultado })
+}
+
+route GET /notificacoes/status/:id [auth.jwt] -> ctx {
+    let id = req.params.id
+    let notificacao = db.query_one(
+        "SELECT id, destino, assunto, status FROM notificacoes WHERE id = ?",
+        id
+    )? 404 "Notificacao nao encontrada"
+    return json(notificacao)
+}

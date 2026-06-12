@@ -1,0 +1,50 @@
+import "./models" as models
+import "./middleware" as auth
+import "husk/env" as env
+import "husk/postgres" as db
+import "husk/log" as log
+
+cors {
+    origins: ["*"]
+    methods: ["GET", "POST", "PUT", "DELETE"]
+    headers: ["Authorization", "Content-Type"]
+}
+
+route GET /health {
+    return json({ status: "ok" })
+}
+
+route GET /usuarios [auth.jwt] -> ctx {
+    let usuarios = db.query("SELECT id, nome, email FROM usuarios")?
+    return json(usuarios)
+}
+
+route POST /usuarios [auth.jwt, timeout=10s] -> ctx {
+    let body = req.body
+    let dados = validate(body, models.UsuarioSchema)?
+    let id = db.insert("usuarios", dados)?
+    log.info("usuario criado: " + id)
+    return status(201) + json({ id: id })
+}
+
+route GET /usuarios/:id<int> [auth.jwt] -> ctx {
+    let id = req.params.id
+    let usuario = db.query_one("SELECT id, nome, email FROM usuarios WHERE id = " + id)?
+    if usuario == nil {
+        return status(404) + json({ erro: "nao encontrado" })
+    }
+    return json(usuario)
+}
+
+route PUT /usuarios/:id<int> [auth.jwt, timeout=10s] -> ctx {
+    let id = req.params.id
+    let dados = validate(req.body, models.UsuarioUpdateSchema)?
+    db.exec("UPDATE usuarios SET nome = ?, email = ? WHERE id = ?", dados.nome, dados.email, id)?
+    return json({ status: "atualizado" })
+}
+
+route DELETE /usuarios/:id<int> [auth.jwt] -> ctx {
+    let id = req.params.id
+    db.exec("DELETE FROM usuarios WHERE id = ?", id)?
+    return status(204)
+}

@@ -1,0 +1,49 @@
+schema UsuarioSchema {
+    nome:  string required max(100)
+    email: string required email()
+    idade: int    min(18) max(120)
+}
+
+schema UsuarioUpdateSchema {
+    nome:  string max(100)
+    email: string email()
+    idade: int    min(18) max(120)
+}
+
+model Usuario {
+    table: "usuarios"
+    fields: {
+        id:    int    primary auto
+        nome:  string required max(100)
+        email: string required email() unique
+        idade: int    min(18)
+        ativo: bool   default(true)
+    }
+}
+
+struct Endereco {
+    rua    string
+    numero int
+    cidade string
+    uf     string
+}
+
+struct Pedido {
+    id         int
+    usuario_id int
+    total      float
+    itens      []string
+}
+
+fn buscar_por_email(email string) ?Usuario {
+    return db.query_one(
+        "SELECT id, nome, email FROM usuarios WHERE email = ?",
+        email
+    )? 404 "Usuario nao encontrado"
+}
+
+fn listar_ativos() []Usuario {
+    return db.query(
+        "SELECT id, nome, email FROM usuarios WHERE ativo = true"
+    )?
+}

@@ -1,0 +1,39 @@
+import "husk/jwt" as jwt
+import "husk/log" as log
+
+struct AuthContext {
+    usuario_id int
+    papel      string
+}
+
+middleware jwt -> AuthContext {
+    let token = req.headers["Authorization"]
+    if token == nil {
+        return status(401) + json({ erro: "token ausente" })
+    }
+    let claims = jwt.decode(token)?
+    set_ctx({
+        usuario_id: parse_int(claims.sub),
+        papel:      claims.papel
+    })
+    next()
+}
+
+middleware logger {
+    let inicio = time.now()
+    log.info("requisicao: " + req.method + " " + req.path)
+    next()
+    let duracao = time.since(inicio)
+    log.info("resposta: " + req.method + " " + req.path + " em " + duracao)
+}
+
+middleware rate_limit {
+    let ip = req.headers["X-Forwarded-For"]
+    let chave = "rate:" + ip
+    let contador = cache.get(chave) ?? 0
+    if contador > 100 {
+        return status(429) + json({ erro: "muitas requisicoes" })
+    }
+    cache.set(chave, contador + 1, 60)
+    next()
+}

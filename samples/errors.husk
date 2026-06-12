@@ -1,0 +1,46 @@
+import "husk/log" as log
+
+struct ApiError {
+    codigo  int
+    mensagem string
+}
+
+fn buscar_usuario(id int) ?Usuario {
+    let usuario = db.query_one(
+        "SELECT id, nome, email FROM usuarios WHERE id = ?",
+        id
+    )? 404 "Usuario nao encontrado"
+    return usuario
+}
+
+fn processar_pagamento(valor float) ?string {
+    if valor <= 0 {
+        return erro("valor invalido")
+    }
+    if valor > 10000 {
+        return erro("valor excede limite")
+    }
+    let transacao = gateway.cobrar(valor)?
+    return transacao.id
+}
+
+route POST /checkout [auth.jwt] -> ctx {
+    let body = validate(req.body, PedidoSchema)?
+    let total = body.itens
+        .map(fn(i) { return i.preco * i.quantidade })
+        .reduce(fn(a, b) { return a + b }, 0)
+
+    let pagamento = processar_pagamento(total)? 402 "Falha no pagamento"
+
+    let pedido = db.insert("pedidos", {
+        usuario_id: ctx.usuario_id,
+        total:      total,
+        pagamento:  pagamento
+    })? 500 break
+
+    return json({
+        pedido_id:  pedido.id,
+        total:      total,
+        pagamento: pagamento
+    })
+}

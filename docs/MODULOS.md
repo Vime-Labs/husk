@@ -185,6 +185,33 @@ route GET /perfil {
 }
 ```
 
+### husk/log
+
+Logging com níveis usando o pacote `log` do Go.
+
+| Função               | Descrição                             |
+|----------------------|---------------------------------------|
+| `log.debug(msg)`     | Log nível DEBUG                       |
+| `log.info(msg)`      | Log nível INFO                        |
+| `log.warn(msg)`      | Log nível WARN                        |
+| `log.error(msg)`     | Log nível ERROR                       |
+| `log.fatal(msg)`     | Log nível FATAL e encerra o programa  |
+
+```husk
+import "husk/log" as log
+
+route GET /ping {
+    log.info("ping recebido")
+    return text("pong")
+}
+```
+
+A saída vai para stderr com timestamp e nível:
+
+```
+2026/06/12 10:15:30 [INFO] ping recebido
+```
+
 ---
 
 ## Importações circulares
