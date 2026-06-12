@@ -118,6 +118,7 @@ Declare pacotes em `husk.json` e instale com `husk install`:
 
 ```bash
 husk install          # clona para vendor/ + resolve transitivas
+husk get <git-url>    # adiciona ao husk.json e instala
 ```
 
 Os packages são incluídos automaticamente em tempo de compilação — sem alterações no código.

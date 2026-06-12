@@ -112,6 +112,17 @@ husk install
 husk install --force   # reinstala mesmo se vendor/ já existir
 ```
 
+### `husk get`
+
+Adiciona uma dependência ao `husk.json` e instala-a imediatamente.
+
+```sh
+husk get https://github.com/Vime-Labs/husk-groq
+husk get https://github.com/Vime-Labs/husk-groq --ref v1.0.0
+```
+
+O nome do package é derivado da URL (último segmento do path, com prefixo `husk-` removido).
+
 Cada dependência é clonada via git para `vendor/<nome>/`. Dependências transitivas (o package tem o seu próprio `husk.json`) são resolvidas recursivamente. Após a instalação, o ficheiro `.vendor.husk` é gerado automaticamente e incluído em tempo de compilação.
 
 ```json

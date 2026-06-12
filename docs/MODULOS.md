@@ -301,6 +301,7 @@ O Husk suporta pacotes externos via git, gerenciados pelo comando `husk install`
 ```sh
 husk install            # clona para vendor/ + resolve transitivas
 husk install --force    # reinstala mesmo se vendor/ já existir
+husk get <git-url>      # adiciona ao husk.json e instala
 ```
 
 O comando:

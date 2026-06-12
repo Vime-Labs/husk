@@ -6,7 +6,7 @@ use husk_parser::{
     ast::{Item, Program},
     formatter,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     env, fs,
@@ -27,14 +27,14 @@ const STDLIB_HTTP: &str = include_str!("stdlib/http.go");
 const MIGRATE_GO: &str = include_str!("stdlib/migrate.go");
 const VENDOR_HUSK: &str = ".vendor.husk";
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 struct Dependency {
     git: String,
     #[serde(default)]
     r#ref: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Manifest {
     name: Option<String>,
     #[serde(default)]
@@ -132,6 +132,7 @@ fn main() {
         Some("add") => cmd_add(&args),
         Some("new") => cmd_new(&args),
         Some("install") => cmd_install(&args),
+        Some("get") => cmd_get(&args),
         Some("migrate") => cmd_migrate(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
@@ -146,7 +147,8 @@ fn main() {
             eprintln!("  husk fmt    <arquivo.husk>        formata código");
             eprintln!("  husk add    <modulo>               adiciona módulo stdlib");
             eprintln!("  husk new    <nome>                 cria novo projeto");
-            eprintln!("  husk install                       instala dependências (vendor/)");
+            eprintln!("  husk install                       instala dependências (vendor/)
+  husk get <git-url> [--ref <ref>]   adiciona dependência e instala");
             eprintln!("  husk migrate create <nome>        cria migration SQL");
             eprintln!("  husk migrate up                   aplica migrations pendentes");
             eprintln!("  husk migrate down                 reverte a última migration");
@@ -337,6 +339,72 @@ fn cmd_install(args: &[String]) {
 
     generate_vendor_husk(&manifest, &cwd);
     ok(&format!("{BOLD}{}{RESET} dependências instaladas em vendor/", manifest.dependencies.len()));
+}
+
+fn cmd_get(args: &[String]) {
+    let url = args.get(2).cloned().unwrap_or_else(|| {
+        eprintln!("{RED}uso:{RESET} husk get <git-url> [--ref <ref>]");
+        eprintln!("  {DIM}ex: husk get https://github.com/Vime-Labs/husk-groq --ref main{RESET}");
+        process::exit(1);
+    });
+
+    let cwd = env::current_dir().unwrap_or_else(|_| die("erro ao obter diretório atual"));
+    let manifest_path = cwd.join("husk.json");
+
+    if !manifest_path.exists() {
+        die("husk.json não encontrado. Crie um com 'husk new <nome>'");
+    }
+
+    let ref_idx = args.iter().position(|a| a == "--ref");
+    let ref_val = ref_idx
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "main".to_string());
+
+    let name = derive_package_name(&url);
+
+    let manifest_str = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| die(&format!("erro ao ler husk.json: {e}")));
+    let mut manifest: Manifest = serde_json::from_str(&manifest_str)
+        .unwrap_or_else(|e| die(&format!("erro ao fazer parse de husk.json: {e}")));
+
+    if manifest.dependencies.contains_key(&name) {
+        step("já existe", &name);
+    } else {
+        manifest.dependencies.insert(
+            name.clone(),
+            Dependency {
+                git: url.clone(),
+                r#ref: ref_val.clone(),
+            },
+        );
+
+        let new_manifest =
+            serde_json::to_string_pretty(&manifest).expect("falha ao serializar husk.json");
+        fs::write(&manifest_path, &new_manifest)
+            .unwrap_or_else(|e| die(&format!("erro ao escrever husk.json: {e}")));
+    }
+
+    let vendor_dir = cwd.join("vendor");
+    fs::create_dir_all(&vendor_dir).expect("falha ao criar diretório vendor/");
+
+    let mut installed = std::collections::HashSet::new();
+    install_dep(
+        &name,
+        &manifest.dependencies[&name],
+        &vendor_dir,
+        &mut installed,
+        false,
+    );
+    generate_vendor_husk(&manifest, &cwd);
+
+    ok(&format!("{BOLD}{name}{RESET} adicionado e instalado"));
+}
+
+fn derive_package_name(url: &str) -> String {
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let name = url.rsplit('/').next().unwrap_or(url);
+    name.strip_prefix("husk-").unwrap_or(name).to_string()
 }
 
 const VENDOR_HUSK_COMMENT: &str = "// gerado automaticamente por 'husk install' — não edite\n";
