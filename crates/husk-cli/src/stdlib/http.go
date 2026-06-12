@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,7 +78,12 @@ func http_request(method string, url string, body interface{}, options ...map[st
 	}
 
 	var reqBody io.Reader
-	if multipartFields != nil {
+
+	// form (application/x-www-form-urlencoded) — tem prioridade
+	if formSet := extractForm(options); formSet != nil {
+		reqBody = strings.NewReader(formSet.Encode())
+		headers["Content-Type"] = "application/x-www-form-urlencoded"
+	} else if multipartFields != nil {
 		var buf bytes.Buffer
 		w := multipart.NewWriter(&buf)
 		for key, val := range multipartFields {
@@ -169,4 +175,23 @@ func http_request(method string, url string, body interface{}, options ...map[st
 		Body:    string(respBody),
 		Headers: respHeaders,
 	}, nil
+}
+
+func extractForm(options []map[string]interface{}) url.Values {
+	if len(options) == 0 {
+		return nil
+	}
+	formRaw, ok := options[0]["form"]
+	if !ok {
+		return nil
+	}
+	formMap, ok := formRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	values := url.Values{}
+	for k, v := range formMap {
+		values.Set(k, fmt.Sprintf("%v", v))
+	}
+	return values
 }

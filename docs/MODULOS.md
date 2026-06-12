@@ -312,6 +312,37 @@ Opções disponíveis:
 | `query`    | `map[string]string`     | Query string params                |
 | `timeout`  | `int`                   | Timeout em segundos                |
 | `multipart`| `map[string](string\|{path, filename})` | Multipart form-data |
+| `form`     | `map[string]string`     | **application/x-www-form-urlencoded** — usado por APIs como Stripe |
+
+O body pode ser:
+- **map** → serializado como JSON automaticamente (default)
+- **string** → enviado como raw
+- **nil** (ou omitido) → sem body. Útil com `form` ou `multipart`
+
+Exemplo com Stripe:
+
+```husk
+import "husk/http" as http
+
+let resp, err = http.post(
+    "https://api.stripe.com/v1/checkout/sessions",
+    nil,
+    {
+        headers: { Authorization: "Bearer sk_test_..." },
+        form: {
+            mode: "payment",
+            "line_items[0][price_data][currency]": "usd",
+            "line_items[0][price_data][product_data][name]": "T-shirt",
+            "line_items[0][price_data][unit_amount]": "2000",
+            "line_items[0][quantity]": "1",
+            success_url: "https://example.com/success",
+            cancel_url: "https://example.com/cancel"
+        }
+    }
+)
+```
+
+A opção `form` tem prioridade sobre `multipart` e body JSON — quando presente, o corpo é codificado como `application/x-www-form-urlencoded`, independentemente dos outros parâmetros.
 
 ---
 
