@@ -168,6 +168,7 @@ impl Codegen {
         let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
         if has_routes {
             self.go_imports.borrow_mut().insert("github.com/go-chi/chi/v5".into());
+            self.go_imports.borrow_mut().insert("github.com/go-chi/chi/v5/middleware".into());
         }
 
         let has_timeout = program.items.iter().any(|i| {
@@ -819,7 +820,7 @@ impl Codegen {
         s.push_str("\t}\n\n");
 
         s.push_str("\tr := chi.NewRouter()\n");
-        s.push_str("\tr.Use(chi.Recoverer)\n\n");
+        s.push_str("\tr.Use(middleware.Recoverer)\n\n");
 
         for item in &program.items {
             if let Item::CorsDef(c) = item {
@@ -1496,20 +1497,19 @@ impl Codegen {
                     return Ok(match field.as_str() {
                         "headers" => format!("r.Header.Get({})", key),
                         "query" => format!("r.URL.Query().Get({})", key),
-                        "body" => format!("_huskBody[{}].(string)", key),
+                        "body" => format!("fmt.Sprintf(\"%v\", _huskBody[{}])", key),
                         "ctx" => format!("r.Context().Value({})", key),
                         _ => format!("r.{}[{}]", capitalize(field), key),
                     });
                 }
             }
         }
-        // Para map index access (ex: user["field"]), adiciona type assertion .(string)
-        // Isso é necessário porque map[string]interface{} retorna interface{}
-        Ok(format!(
-            "{}[{}].(string)",
-            self.gen_expr(obj, ctx)?,
-            self.gen_expr(idx, ctx)?
-        ))
+        // Map index access (ex: user["field"]) retorna interface{} que não pode ser usado
+        // diretamente como string. Usamos fmt.Sprintf("%v", ...) para conversão segura,
+        // compatível com int32 (pgx), float64 (JSON), string, etc.
+        let obj_go = self.gen_expr(obj, ctx)?;
+        let idx_go = self.gen_expr(idx, ctx)?;
+        Ok(format!("fmt.Sprintf(\"%v\", {}[{}])", obj_go, idx_go))
     }
 
     fn gen_call(&self, call: &CallExpr, ctx: Ctx) -> Result<String, CodegenError> {
@@ -2415,7 +2415,7 @@ route GET /perfil [auth] {
 
     #[test]
     fn test_req_body_type_assertion() {
-        // req.body["x"] deve gerar type assertion .(string)
+        // req.body["x"] retorna interface{}, sem type assertion
         let go = codegen(
             r#"
 route POST /login {
@@ -2424,7 +2424,8 @@ route POST /login {
 }
 "#,
         );
-        assert!(go.contains("_huskBody[\"email\"].(string)"));
+        assert!(go.contains("_huskBody[\"email\"]"));
+        assert!(!go.contains(".(string)"));
     }
 
     #[test]
@@ -2541,7 +2542,7 @@ route POST /dados {
         );
         assert!(go.contains("body := _huskBody"));
         assert!(!go.contains("body := r.Body"));
-        assert!(go.contains("body[\"nome\"].(string)"));
+        assert!(go.contains("body[\"nome\"]"));
     }
 
     #[test]

@@ -1,0 +1,110 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Husk",
+  "scopeName": "source.husk",
+  "fileTypes": ["husk"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#http-methods" },
+    { "include": "#builtins" },
+    { "include": "#operators" },
+    { "include": "#identifiers" },
+    { "include": "#function-def" },
+    { "include": "#type-def" },
+    { "include": "#middleware-def" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.double-slash.husk", "match": "//.*$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.husk",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            { "name": "constant.character.escape.husk", "match": "\\\\[ntr\"\\\\]" }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.float.husk", "match": "\\b[0-9]+\\.[0-9]+\\b" },
+        { "name": "constant.numeric.integer.husk", "match": "\\b[0-9]+\\b" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        { "name": "keyword.control.husk", "match": "\\b(fn|return|let|if|else|for|in|try|catch|retry|break)\\b" },
+        { "name": "keyword.control.husk", "match": "\\bnext\\b" },
+        { "name": "keyword.declaration.husk", "match": "\\b(route|middleware|import|as|struct|schema|model|cors)\\b" },
+        { "name": "keyword.other.validator.husk", "match": "\\b(required|unique|email)\\b" },
+        { "name": "constant.language.husk", "match": "\\b(true|false|nil)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.husk", "match": "\\b(int|float|string|bool|error|map)\\b" }
+      ]
+    },
+    "http-methods": {
+      "patterns": [
+        { "name": "keyword.other.http-method.husk", "match": "\\b(GET|POST|PUT|PATCH|DELETE)\\b" }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        { "name": "support.function.builtin.husk", "match": "\\b(json|text|status|set_ctx|parse_int|float|string|erro|assert_eq|validate|require_role|require_field)\\b" },
+        { "name": "support.function.builtin.husk", "match": "\\b(abs|sqrt|min|max)\\b" },
+        { "name": "support.function.builtin.husk", "match": "\\b(len|contains|starts_with|replace|split|trim|upper|lower)\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.arrow.husk", "match": "->" },
+        { "name": "keyword.operator.spread.husk", "match": "\\.\\.\\." },
+        { "name": "keyword.operator.comparison.husk", "match": "==|!=|<=|>=|<|>" },
+        { "name": "keyword.operator.logical.husk", "match": "&&|\\|\\||!" },
+        { "name": "keyword.operator.arithmetic.husk", "match": "\\+|\\-|\\*|/|%" }
+      ]
+    },
+    "function-def": {
+      "patterns": [
+        {
+          "match": "(?x)^\\s*fn\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": { "1": { "name": "entity.name.function.husk" } }
+        }
+      ]
+    },
+    "type-def": {
+      "patterns": [
+        {
+          "match": "(?x)^\\s*(?:struct|schema|model)\\s+([A-Z][a-zA-Z0-9_]*)",
+          "captures": { "1": { "name": "entity.name.type.husk" } }
+        }
+      ]
+    },
+    "middleware-def": {
+      "patterns": [
+        {
+          "match": "(?x)^\\s*middleware\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": { "1": { "name": "entity.name.function.husk" } }
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        { "name": "variable.language.husk", "match": "\\b(req|res)\\b" },
+        { "name": "variable.other.husk", "match": "[a-zA-Z_][a-zA-Z0-9_]*" }
+      ]
+    }
+  }
+}

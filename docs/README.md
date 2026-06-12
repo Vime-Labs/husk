@@ -18,3 +18,4 @@ Referência da linguagem Husk. Cada arquivo cobre uma parte da linguagem.
 | [CLI.md](CLI.md)                     | run/dev/build/test/check/fmt/add/new/lsp, source maps      | ✓ v1.0  |
 | [ANALISADOR.md](ANALISADOR.md)       | Análise semântica, built-ins, verificação de tipos/escopo  | ✓ v1.0  |
 | [MIGRATIONS.md](MIGRATIONS.md)       | Migrations com goose, `husk migrate` commands              | ✓ v1.0  |
+| [EDITORES.md](EDITORES.md)           | Extensão VS Code, LSP, syntax highlighting                 | ✓ v0.8  |

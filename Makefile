@@ -21,6 +21,7 @@ clean:
 ## Instala o binário husk globalmente (~/.cargo/bin/husk)
 install:
 	cargo install --path crates/husk-cli --force
+	cargo install --path crates/husk-lsp --force
 
 ## Atualiza a versão de todos os crates do workspace
 ## Uso: make bump-version VERSION=0.2.0

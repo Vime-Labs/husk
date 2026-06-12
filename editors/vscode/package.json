@@ -1,0 +1,70 @@
+{
+  "name": "husk",
+  "displayName": "Husk",
+  "description": "Husk language support — syntax highlighting, LSP integration, snippets",
+  "version": "0.1.0",
+  "publisher": "vime",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Vime-Labs/husk"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": ["husk", "vime", "web"],
+  "activationEvents": [
+    "onLanguage:husk"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "husk",
+        "aliases": ["Husk", "husk"],
+        "extensions": [".husk"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "husk",
+        "scopeName": "source.husk",
+        "path": "./syntaxes/husk.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "husk.check",
+        "title": "Husk: Check current file"
+      },
+      {
+        "command": "husk.run",
+        "title": "Husk: Run current file"
+      }
+    ],
+    "configuration": {
+      "title": "Husk",
+      "properties": {
+        "husk.lsp.path": {
+          "type": "string",
+          "default": "husk-lsp",
+          "description": "Path to the husk-lsp binary"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "npx @vscode/vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.84.0"
+  }
+}

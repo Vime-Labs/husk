@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var pgPool *pgxpool.Pool
+var pgOnce sync.Once
 
 func init() {
 	url := os.Getenv("DATABASE_URL")
@@ -21,12 +23,16 @@ func init() {
 }
 
 func db_connect(url string) error {
-	pool, err := pgxpool.New(context.Background(), url)
-	if err != nil {
-		return err
-	}
-	pgPool = pool
-	return nil
+	var connectErr error
+	pgOnce.Do(func() {
+		pool, err := pgxpool.New(context.Background(), url)
+		if err != nil {
+			connectErr = err
+			return
+		}
+		pgPool = pool
+	})
+	return connectErr
 }
 
 func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error) {

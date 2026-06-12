@@ -56,7 +56,7 @@ impl StdlibDeps {
     fn go_mod_requires(&self) -> String {
         let mut reqs = vec!["github.com/go-chi/chi/v5 v5.2.1".to_string()];
         if self.has_cors {
-            reqs.push("github.com/go-chi/cors v1.5.0".to_string());
+            reqs.push("github.com/go-chi/cors v1.2.2".to_string());
         }
         if self.has("husk/postgres") {
             reqs.push("github.com/jackc/pgx/v5 v5.7.4".to_string());
