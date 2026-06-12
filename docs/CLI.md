@@ -86,29 +86,44 @@ husk fmt main.husk
 
 ### `husk add <modulo>`
 
-Adiciona um módulo da stdlib ao projeto. Módulos disponíveis: `env`, `postgres`, `crypto`, `jwt`.
+Adiciona um módulo da stdlib ao projeto. Módulos disponíveis: `env`, `postgres`, `crypto`, `jwt`, `log`, `http`.
 
 ```sh
 husk add postgres
 # adiciona: import "husk/postgres" as postgres
 ```
 
-### `husk lsp`
-
-Inicia o servidor LSP para integração com editores. Conecta via stdin/stdout usando o protocolo LSP.
-
-```sh
-husk lsp
-```
-
 ### `husk new <nome>`
 
-Cria um novo projeto no diretório `<nome>/` com `main.husk` mínimo e `.gitignore`.
+Cria um novo projeto no diretório `<nome>/` com `main.husk`, `husk.json` e `.gitignore`.
 
 ```sh
 husk new meu-projeto
 cd meu-projeto
 husk run main.husk
+```
+
+### `husk install`
+
+Instala dependências externas declaradas em `husk.json` para o diretório `vendor/`.
+
+```sh
+husk install
+husk install --force   # reinstala mesmo se vendor/ já existir
+```
+
+Cada dependência é clonada via git para `vendor/<nome>/`. Dependências transitivas (o package tem o seu próprio `husk.json`) são resolvidas recursivamente. Após a instalação, o ficheiro `.vendor.husk` é gerado automaticamente e incluído em tempo de compilação.
+
+```json
+{
+  "name": "meu-app",
+  "dependencies": {
+    "framework": {
+      "git": "https://github.com/vime/husk-framework",
+      "ref": "v0.1.0"
+    }
+  }
+}
 ```
 
 ---
@@ -150,14 +165,19 @@ Erros do compilador Go são traduzidos de volta para as linhas do código `.husk
 
 ```
 meu-projeto/
-├── main.husk            ponto de entrada, rotas e middlewares
-├── usuarios.husk        módulo de domínio
-├── usuarios_test.husk   testes
-├── produtos.husk        módulo de domínio
-└── .gitignore           exclui *.go, go.mod, go.sum e o binário
+├── husk.json             manifesto do projeto (nome, dependências)
+├── main.husk             ponto de entrada, rotas e middlewares
+├── usuarios.husk         módulo de domínio
+├── usuarios_test.husk    testes
+├── vendor/               dependências externas (gerado por husk install)
+│   └── framework/
+│       ├── main.husk
+│       └── husk.json
+├── .vendor.husk          auto-import gerado por husk install
+└── .gitignore            exclui *.go, go.mod, go.sum, vendor/
 ```
 
-O `.gitignore` gerado por `husk new` já exclui os artefatos Go. Não versionar o código transpilado.
+O `.gitignore` gerado por `husk new` já exclui os artefatos Go e o diretório `vendor/`. Não versionar o código transpilado.
 
 ---
 

@@ -6,6 +6,7 @@ use husk_parser::{
     ast::{Item, Program},
     formatter,
 };
+use serde::Deserialize;
 use std::{
     collections::HashSet,
     env, fs,
@@ -24,6 +25,21 @@ const STDLIB_JWT: &str = include_str!("stdlib/jwt.go");
 const STDLIB_LOG: &str = include_str!("stdlib/log.go");
 const STDLIB_HTTP: &str = include_str!("stdlib/http.go");
 const MIGRATE_GO: &str = include_str!("stdlib/migrate.go");
+const VENDOR_HUSK: &str = ".vendor.husk";
+
+#[derive(Deserialize, Clone)]
+struct Dependency {
+    git: String,
+    #[serde(default)]
+    r#ref: String,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    name: Option<String>,
+    #[serde(default)]
+    dependencies: std::collections::HashMap<String, Dependency>,
+}
 
 struct StdlibDeps {
     modules: Vec<String>,
@@ -115,6 +131,7 @@ fn main() {
         Some("fmt") => cmd_fmt(&args),
         Some("add") => cmd_add(&args),
         Some("new") => cmd_new(&args),
+        Some("install") => cmd_install(&args),
         Some("migrate") => cmd_migrate(&args),
         _ => {
             eprintln!("{BOLD}husk{RESET} — linguagem de programação web");
@@ -129,6 +146,7 @@ fn main() {
             eprintln!("  husk fmt    <arquivo.husk>        formata código");
             eprintln!("  husk add    <modulo>               adiciona módulo stdlib");
             eprintln!("  husk new    <nome>                 cria novo projeto");
+            eprintln!("  husk install                       instala dependências (vendor/)");
             eprintln!("  husk migrate create <nome>        cria migration SQL");
             eprintln!("  husk migrate up                   aplica migrations pendentes");
             eprintln!("  husk migrate down                 reverte a última migration");
@@ -286,6 +304,166 @@ fn cmd_add(args: &[String]) {
     fs::write(&file, &new_source).unwrap_or_else(|e| die(&format!("erro ao escrever '{file}': {e}")));
 
     ok(&format!("{BOLD}{module}{RESET} adicionado a {file}"));
+}
+
+fn cmd_install(args: &[String]) {
+    let force = args.contains(&"--force".to_string());
+    let cwd = env::current_dir().unwrap_or_else(|_| die("erro ao obter diretório atual"));
+    let manifest_path = cwd.join("husk.json");
+
+    if !manifest_path.exists() {
+        die("husk.json não encontrado. Crie um com 'husk new <nome>'");
+    }
+
+    let manifest_str = fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|e| die(&format!("erro ao ler husk.json: {e}")));
+    let manifest: Manifest = serde_json::from_str(&manifest_str)
+        .unwrap_or_else(|e| die(&format!("erro ao fazer parse de husk.json: {e}")));
+
+    if manifest.dependencies.is_empty() {
+        ok("nenhuma dependência declarada em husk.json");
+        return;
+    }
+
+    let vendor_dir = cwd.join("vendor");
+    fs::create_dir_all(&vendor_dir).expect("falha ao criar diretório vendor/");
+
+    let mut installed = std::collections::HashSet::new();
+    step("instalando", &format!("{} dependências", manifest.dependencies.len()));
+
+    for (name, dep) in &manifest.dependencies {
+        install_dep(name, dep, &vendor_dir, &mut installed, force);
+    }
+
+    generate_vendor_husk(&manifest, &cwd);
+    ok(&format!("{BOLD}{}{RESET} dependências instaladas em vendor/", manifest.dependencies.len()));
+}
+
+const VENDOR_HUSK_COMMENT: &str = "// gerado automaticamente por 'husk install' — não edite\n";
+
+fn install_dep(
+    name: &str,
+    dep: &Dependency,
+    vendor_dir: &Path,
+    installed: &mut std::collections::HashSet<String>,
+    force: bool,
+) {
+    let dep_dir = vendor_dir.join(name);
+    let dep_key = format!("{}@{}", dep.git, dep.r#ref);
+
+    if installed.contains(&dep_key) {
+        return;
+    }
+    installed.insert(dep_key);
+
+    if dep_dir.exists() {
+        if force {
+            fs::remove_dir_all(&dep_dir).expect("falha ao remover vendor existente");
+        } else {
+            step("já instalado", name);
+            return;
+        }
+    }
+
+    step("clonando", name);
+    let ref_spec = if dep.r#ref.is_empty() {
+        "HEAD".to_string()
+    } else {
+        dep.r#ref.clone()
+    };
+
+    let status = Command::new("git")
+        .args([
+            "clone",
+            "--depth", "1",
+            "--branch", &ref_spec,
+            &dep.git,
+            &dep_dir.to_string_lossy(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap_or_else(|_| die("git não encontrado. Instale em https://git-scm.com/"));
+
+    if !status.success() {
+        // tenta sem branch (pode ser commit hash)
+        let status2 = Command::new("git")
+            .args([
+                "clone",
+                "--depth", "1",
+                &dep.git,
+                &dep_dir.to_string_lossy(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap_or_else(|_| die("falha ao executar git clone"));
+
+        if !status2.success() {
+            die(&format!("falha ao clonar '{}' de '{}'", name, dep.git));
+        }
+
+        // faz checkout do ref específico (se for commit hash)
+        if !dep.r#ref.is_empty() {
+            let co = Command::new("git")
+                .args(["-C", &dep_dir.to_string_lossy(), "checkout", &dep.r#ref])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            if !co.success() {
+                die(&format!("falha ao fazer checkout de '{}'", dep.r#ref));
+            }
+        }
+    }
+
+    // dependências transitivas
+    let trans_manifest_path = dep_dir.join("husk.json");
+    if trans_manifest_path.exists() {
+        let trans_str = fs::read_to_string(&trans_manifest_path)
+            .unwrap_or_else(|e| die(&format!("erro ao ler husk.json de '{}': {e}", name)));
+        if let Ok(trans_manifest) = serde_json::from_str::<Manifest>(&trans_str) {
+            for (trans_name, trans_dep) in &trans_manifest.dependencies {
+                let trans_dir = vendor_dir.join(trans_name);
+                if !trans_dir.exists() || force {
+                    install_dep(trans_name, trans_dep, vendor_dir, installed, force);
+                }
+            }
+        }
+    }
+}
+
+fn generate_vendor_husk(manifest: &Manifest, cwd: &Path) {
+    let mut lines = vec![VENDOR_HUSK_COMMENT.to_string()];
+    for (name, _dep) in &manifest.dependencies {
+        let entry_point = find_entry_point(&cwd.join("vendor").join(name));
+        lines.push(format!("import \"./{entry_point}\" as {name}\n"));
+    }
+    let content: String = lines.join("");
+    let vendor_husk_path = cwd.join(VENDOR_HUSK);
+    fs::write(&vendor_husk_path, &content)
+        .unwrap_or_else(|e| die(&format!("erro ao escrever .vendor.husk: {e}")));
+}
+
+fn find_entry_point(dir: &Path) -> String {
+    let candidates = ["main.husk", "mod.husk", "lib.husk"];
+    for name in &candidates {
+        let path = dir.join(name);
+        if path.exists() {
+            return format!("vendor/{}/{}", dir.file_name().unwrap().to_string_lossy(), name);
+        }
+    }
+    // fallback: primeiro .husk que encontrar
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "husk") {
+                let fname = path.file_name().unwrap().to_string_lossy();
+                return format!("vendor/{}/{}", dir.file_name().unwrap().to_string_lossy(), fname);
+            }
+        }
+    }
+    format!("vendor/{}/main.husk", dir.file_name().unwrap().to_string_lossy())
 }
 
 fn cmd_lsp() {
@@ -708,7 +886,16 @@ fn cmd_new(args: &[String]) {
     );
     fs::write(dir.join("main.husk"), main_husk).expect("falha ao criar main.husk");
 
-    let gitignore = format!("{name}\n*.go\ngo.mod\ngo.sum\n");
+    let husk_json = format!(
+        r#"{{
+    "name": "{name}",
+    "dependencies": {{}}
+}}
+"#
+    );
+    fs::write(dir.join("husk.json"), husk_json).expect("falha ao criar husk.json");
+
+    let gitignore = format!("{name}\n*.go\ngo.mod\ngo.sum\nvendor/\n");
     fs::write(dir.join(".gitignore"), gitignore).expect("falha ao criar .gitignore");
 
     ok(&format!("projeto {BOLD}{name}{RESET} criado"));
@@ -721,10 +908,18 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
     let step_start = Instant::now();
     step("transpilando", file);
 
-    let source =
+    let mut source =
         fs::read_to_string(file).unwrap_or_else(|e| die(&format!("erro ao ler '{file}': {e}")));
 
+    // auto-inclui .vendor.husk se existir
     let base_dir = Path::new(file).parent().unwrap_or(Path::new("."));
+    let vendor_husk_path = base_dir.join(VENDOR_HUSK);
+    if vendor_husk_path.exists() {
+        let vendor_source = fs::read_to_string(&vendor_husk_path)
+            .unwrap_or_else(|e| die(&format!("erro ao ler .vendor.husk: {e}")));
+        source = vendor_source + &source;
+    }
+
     let program = parse_source(&source, file);
     let mut visited = HashSet::new();
     let mut processing = HashSet::new();

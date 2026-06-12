@@ -12,3 +12,5 @@ husk-lexer    = { path = "../husk-lexer" }
 husk-parser   = { path = "../husk-parser" }
 husk-codegen  = { path = "../husk-codegen" }
 husk-analyzer = { path = "../husk-analyzer" }
+serde         = { version = "1", features = ["derive"] }
+serde_json    = "1"

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -37,48 +40,25 @@ func http_delete(url string, options ...map[string]interface{}) (*httpResponse, 
 }
 
 func http_request(method string, url string, body interface{}, options ...map[string]interface{}) (*httpResponse, error) {
-	var reqBody io.Reader
-	if body != nil {
-		switch v := body.(type) {
-		case string:
-			reqBody = strings.NewReader(v)
-		case map[string]interface{}, []interface{}:
-			b, err := json.Marshal(v)
-			if err != nil {
-				return nil, fmt.Errorf("husk/http: erro ao serializar body: %v", err)
-			}
-			reqBody = bytes.NewReader(b)
-		default:
-			b, err := json.Marshal(v)
-			if err != nil {
-				return nil, fmt.Errorf("husk/http: erro ao serializar body: %v", err)
-			}
-			reqBody = bytes.NewReader(b)
-		}
-	}
-
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("husk/http: erro ao criar requisição: %v", err)
-	}
-
+	headers := make(map[string]string)
+	query := make(map[string]string)
 	var timeout time.Duration
+	var multipartFields map[string]interface{}
+
 	if len(options) > 0 {
 		opts := options[0]
-		if headers, ok := opts["headers"]; ok {
-			if hMap, ok := headers.(map[string]interface{}); ok {
-				for k, v := range hMap {
-					req.Header.Set(k, fmt.Sprintf("%v", v))
+		if h, ok := opts["headers"]; ok {
+			if m, ok := h.(map[string]interface{}); ok {
+				for k, v := range m {
+					headers[k] = fmt.Sprintf("%v", v)
 				}
 			}
 		}
-		if qs, ok := opts["query"]; ok {
-			if qMap, ok := qs.(map[string]interface{}); ok {
-				q := req.URL.Query()
-				for k, v := range qMap {
-					q.Set(k, fmt.Sprintf("%v", v))
+		if q, ok := opts["query"]; ok {
+			if m, ok := q.(map[string]interface{}); ok {
+				for k, v := range m {
+					query[k] = fmt.Sprintf("%v", v)
 				}
-				req.URL.RawQuery = q.Encode()
 			}
 		}
 		if t, ok := opts["timeout"]; ok {
@@ -89,6 +69,82 @@ func http_request(method string, url string, body interface{}, options ...map[st
 				timeout = time.Duration(v) * time.Second
 			}
 		}
+		if mp, ok := opts["multipart"]; ok {
+			if m, ok := mp.(map[string]interface{}); ok {
+				multipartFields = m
+			}
+		}
+	}
+
+	var reqBody io.Reader
+	if multipartFields != nil {
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		for key, val := range multipartFields {
+			switch v := val.(type) {
+			case string:
+				w.WriteField(key, v)
+			case map[string]interface{}:
+				fpath, _ := v["path"].(string)
+				filename, _ := v["filename"].(string)
+				if fpath == "" {
+					continue
+				}
+				if filename == "" {
+					filename = filepath.Base(fpath)
+				}
+				fw, err := w.CreateFormFile(key, filename)
+				if err != nil {
+					w.Close()
+					return nil, fmt.Errorf("husk/http: erro ao criar campo file: %v", err)
+				}
+				f, err := os.Open(fpath)
+				if err != nil {
+					w.Close()
+					return nil, fmt.Errorf("husk/http: erro ao abrir '%s': %v", fpath, err)
+				}
+				_, err = io.Copy(fw, f)
+				f.Close()
+				if err != nil {
+					w.Close()
+					return nil, fmt.Errorf("husk/http: erro ao ler '%s': %v", fpath, err)
+				}
+			}
+		}
+		w.Close()
+		reqBody = &buf
+		headers["Content-Type"] = w.FormDataContentType()
+	} else if body != nil {
+		switch v := body.(type) {
+		case string:
+			reqBody = strings.NewReader(v)
+		default:
+			b, err := json.Marshal(v)
+			if err != nil {
+				return nil, fmt.Errorf("husk/http: erro ao serializar body: %v", err)
+			}
+			reqBody = bytes.NewReader(b)
+			if _, ok := headers["Content-Type"]; !ok {
+				headers["Content-Type"] = "application/json"
+			}
+		}
+	}
+
+	req, err := http.NewRequest(method, url, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("husk/http: erro ao criar requisição: %v", err)
+	}
+
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	if len(query) > 0 {
+		q := req.URL.Query()
+		for k, v := range query {
+			q.Set(k, v)
+		}
+		req.URL.RawQuery = q.Encode()
 	}
 
 	client := &http.Client{Timeout: timeout}

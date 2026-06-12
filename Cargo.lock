@@ -48,6 +48,8 @@ dependencies = [
  "husk-codegen",
  "husk-lexer",
  "husk-parser",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

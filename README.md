@@ -100,6 +100,39 @@ cd meu-projeto
 husk dev main.husk
 ```
 
+## Dependências externas
+
+Declare pacotes em `husk.json` e instale com `husk install`:
+
+```json
+{
+  "name": "meu-app",
+  "dependencies": {
+    "framework": {
+      "git": "https://github.com/vime/husk-framework",
+      "ref": "v0.1.0"
+    }
+  }
+}
+```
+
+```bash
+husk install          # clona para vendor/ + resolve transitivas
+```
+
+Os packages são incluídos automaticamente em tempo de compilação — sem alterações no código.
+
+## Módulos stdlib
+
+| Módulo          | Descrição                                     |
+|-----------------|-----------------------------------------------|
+| `husk/env`      | Variáveis de ambiente, `.env` loading         |
+| `husk/postgres` | PostgreSQL via pgx (UUID→string automático)   |
+| `husk/crypto`   | bcrypt + HMAC-SHA256                          |
+| `husk/jwt`      | Criação e verificação de JWT                  |
+| `husk/log`      | Logging com níveis                            |
+| `husk/http`     | Cliente HTTP com suporte a multipart          |
+
 ## Estado
 
 Husk está em uso em produção na Vime Sistemas para construção de APIs REST financeiras. A linguagem é considerada estável para o seu escopo actual e recebe melhorias contínuas.
