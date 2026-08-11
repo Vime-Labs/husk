@@ -1210,7 +1210,9 @@ func __husk_to_bool(v interface{}) bool {
 
         Ok(format!(
             "for _, {} := range {} {{\n{}\n}}",
-            f.item, collection, body_str
+            mangle_go_ident(&f.item),
+            collection,
+            body_str
         ))
     }
 
