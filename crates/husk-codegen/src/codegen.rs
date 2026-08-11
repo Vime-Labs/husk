@@ -976,7 +976,9 @@ func __husk_to_bool(v interface{}) bool {
             s.push_str("\t\t_huskBodyRawBytes, _ := io.ReadAll(r.Body)\n");
             s.push_str("\t\tvar _huskBody map[string]interface{}\n");
             s.push_str("\t\tjson.Unmarshal(_huskBodyRawBytes, &_huskBody)\n");
-            s.push_str("\t\t_huskBodyRaw := string(_huskBodyRawBytes)\n");
+            if block_uses_body_raw(&route.body) {
+                s.push_str("\t\t_huskBodyRaw := string(_huskBodyRawBytes)\n");
+            }
         }
         s.push_str(&self.gen_block(&route.body, Ctx::Route, 2)?);
         s.push_str("\t})\n");
@@ -2098,6 +2100,50 @@ fn capitalize(s: &str) -> String {
 
 fn block_uses_body(block: &Block) -> bool {
     block.stmts.iter().any(|s| stmt_uses_body(s))
+}
+
+fn block_uses_body_raw(block: &Block) -> bool {
+    block
+        .stmts
+        .iter()
+        .any(|s| stmt_uses_body_raw(s))
+}
+
+fn stmt_uses_body_raw(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return(exprs) => exprs.iter().any(expr_uses_body_raw),
+        Stmt::Let(l) => expr_uses_body_raw(&l.value),
+        Stmt::LetMulti(l) => expr_uses_body_raw(&l.value),
+        Stmt::Expr(e) => expr_uses_body_raw(e),
+        Stmt::ForIn(f) => expr_uses_body_raw(&f.collection) || block_uses_body_raw(&f.body),
+        Stmt::If(i) => {
+            block_uses_body_raw(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body_raw)
+        }
+        Stmt::TryLet(t) => expr_uses_body_raw(&t.call),
+        Stmt::TryCatch(tc) => block_uses_body_raw(&tc.try_block) || block_uses_body_raw(&tc.catch_block),
+        Stmt::Retry(r) => block_uses_body_raw(&r.body),
+        Stmt::Assign(a) => expr_uses_body_raw(&a.target) || expr_uses_body_raw(&a.value),
+    }
+}
+
+fn expr_uses_body_raw(expr: &Expr) -> bool {
+    match expr {
+        Expr::FieldAccess(e, field) => {
+            if let Expr::Ident(name) = e.as_ref() {
+                if name == "req" && (field == "body_raw" || field == "bodyRaw") {
+                    return true;
+                }
+            }
+            expr_uses_body_raw(e)
+        }
+        Expr::Call(c) => expr_uses_body_raw(&c.callee) || c.args.iter().any(expr_uses_body_raw),
+        Expr::Index(obj, _) => expr_uses_body_raw(obj),
+        Expr::BinOp(l, _, r) => expr_uses_body_raw(l) || expr_uses_body_raw(r),
+        Expr::Unary(_, e) => expr_uses_body_raw(e),
+        Expr::Try(t) => expr_uses_body_raw(&t.expr),
+        Expr::Spread(e) => expr_uses_body_raw(e),
+        _ => false,
+    }
 }
 
 fn stmt_uses_body(stmt: &Stmt) -> bool {
