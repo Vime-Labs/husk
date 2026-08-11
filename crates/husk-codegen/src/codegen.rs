@@ -721,7 +721,7 @@ func __husk_to_bool(v interface{}) bool {
         let params = f
             .params
             .iter()
-            .map(|p| format!("{} {}", p.name, go_type(&p.ty)))
+            .map(|p| format!("{} {}", mangle_go_ident(&p.name), go_type(&p.ty)))
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -1043,7 +1043,12 @@ func __husk_to_bool(v interface{}) bool {
                 // db.exec returns (interface{}, error); when assigning to single var,
                 // prefix with _, to ignore the sql.Result
                 let prefix = if self.is_db_exec(&l.value) { "_, " } else { "" };
-                Ok(format!("{}{} {} {}", prefix, l.name, op, expr))
+                let target = if l.name == "_" {
+                    l.name.clone()
+                } else {
+                    mangle_go_ident(&l.name)
+                };
+                Ok(format!("{}{} {} {}", prefix, target, op, expr))
             }
             Stmt::LetMulti(l) => {
                 // Go exige ao menos um nome novo para :=; se todos já existem, usa =
@@ -1054,7 +1059,17 @@ func __husk_to_bool(v interface{}) bool {
                 }
                 Ok(format!(
                     "{} {} {}",
-                    l.names.join(", "),
+                    l.names
+                        .iter()
+                        .map(|n| {
+                            if n != "_" {
+                                mangle_go_ident(n)
+                            } else {
+                                n.clone()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", "),
                     op,
                     self.gen_expr(&l.value, ctx)?
                 ))
@@ -1353,7 +1368,7 @@ func __husk_to_bool(v interface{}) bool {
         match expr {
             Expr::Lit(lit) => Ok(gen_lit(lit)),
             Expr::Nil => Ok("nil".into()),
-            Expr::Ident(name) => Ok(name.clone()),
+            Expr::Ident(name) => Ok(mangle_go_ident(name)),
             Expr::Call(call) => self.gen_call(call, ctx),
             Expr::FieldAccess(obj, f) => self.gen_field_access(obj, f, ctx),
             Expr::Index(obj, idx) => self.gen_index(obj, idx, ctx),
@@ -1991,6 +2006,21 @@ fn go_type(ty: &Type) -> String {
         Type::Map => "map[string]interface{}".into(),
         Type::List(inner) => format!("[]{}", go_type(inner)),
         Type::Named(n) => n.clone(),
+    }
+}
+
+/// Evita colisão com palavras reservadas do Go ao emitir identificadores
+/// (ex.: parâmetro husk `type` → variável Go `type_`).
+fn mangle_go_ident(name: &str) -> String {
+    const GO_KEYWORDS: &[&str] = &[
+        "break", "case", "chan", "const", "continue", "default", "defer", "else",
+        "fallthrough", "for", "func", "go", "goto", "if", "import", "interface",
+        "map", "package", "range", "return", "select", "struct", "switch", "type", "var",
+    ];
+    if GO_KEYWORDS.contains(&name) {
+        format!("{}_", name)
+    } else {
+        name.to_string()
     }
 }
 
