@@ -461,7 +461,30 @@ impl Parser {
                 TokenKind::LBrace | TokenKind::LBracket | TokenKind::Eof => break,
                 TokenKind::Ident(name) => {
                     self.advance();
-                    segments.push(PathSegment::Literal(name));
+                    // suporte a hífens em segmentos de rota: request-code -> "request-code"
+                    let mut lit = name;
+                    while matches!(self.current_kind(), TokenKind::Minus)
+                        && matches!(
+                            self.peek_next_kind(),
+                            Some(TokenKind::Ident(_)) | Some(TokenKind::Int(_))
+                        )
+                    {
+                        self.advance(); // consome o '-'
+                        match self.current_kind().clone() {
+                            TokenKind::Ident(part) => {
+                                self.advance();
+                                lit.push('-');
+                                lit.push_str(&part);
+                            }
+                            TokenKind::Int(n) => {
+                                self.advance();
+                                lit.push('-');
+                                lit.push_str(&n.to_string());
+                            }
+                            _ => unreachable!(),
+                        }
+                    }
+                    segments.push(PathSegment::Literal(lit));
                 }
                 TokenKind::Colon => {
                     self.advance();
