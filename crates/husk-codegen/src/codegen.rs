@@ -2599,7 +2599,7 @@ route GET /perfil [auth] {
 
     #[test]
     fn test_req_body_type_assertion() {
-        // req.body["x"] retorna interface{}, sem type assertion
+        // req.body["email"] → __husk_to_string(_huskBody["email"]) (sem type assertion direta)
         let go = codegen(
             r#"
 route POST /login {
@@ -2608,8 +2608,8 @@ route POST /login {
 }
 "#,
         );
-        assert!(go.contains("_huskBody[\"email\"]"));
-        assert!(!go.contains(".(string)"));
+        assert!(go.contains("__husk_to_string(_huskBody[\"email\"])"));
+        assert!(!go.contains("_huskBody[\"email\"].(string)"));
     }
 
     #[test]
@@ -2756,7 +2756,9 @@ route POST /criar {
 }
 "#,
         );
-        assert!(go.contains("criar(body[\"nome\"].(string), body[\"idade\"].(int))"));
+        println!("###SPREAD###\n{}", go);
+        // Spread do body: conversão por helper tipado do mapa (string/int/float/bool)
+        assert!(go.contains("criar(__husk_to_string(body[\"nome\"]), __husk_to_int(body[\"idade\"]))"));
     }
 
     #[test]
