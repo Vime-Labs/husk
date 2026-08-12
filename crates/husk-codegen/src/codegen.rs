@@ -1210,12 +1210,19 @@ func __husk_to_bool(v interface{}) bool {
             .collect::<Vec<_>>()
             .join("\n");
 
-        Ok(format!(
-            "for _, {} := range {} {{\n{}\n}}",
-            mangle_go_ident(&f.item),
-            collection,
-            body_str
-        ))
+        let item = if block_uses_ident(&f.body, &f.item) {
+            mangle_go_ident(&f.item)
+        } else {
+            "_".to_string()
+        };
+
+        let head = if item == "_" {
+            format!("for range {}", collection)
+        } else {
+            format!("for _, {} := range {}", item, collection)
+        };
+
+        Ok(format!("{} {{\n{}\n}}", head, body_str))
     }
 
     fn gen_try_catch(&self, tc: &TryCatchStmt, ctx: Ctx, indent: usize) -> Result<String, CodegenError> {
@@ -1376,12 +1383,19 @@ func __husk_to_bool(v interface{}) bool {
             Expr::Call(call) => self.gen_call(call, ctx),
             Expr::FieldAccess(obj, f) => self.gen_field_access(obj, f, ctx),
             Expr::Index(obj, idx) => self.gen_index(obj, idx, ctx),
-            Expr::BinOp(l, op, r) => Ok(format!(
-                "{} {} {}",
-                self.gen_expr(l, ctx)?,
-                go_binop(op),
-                self.gen_expr(r, ctx)?
-            )),
+            Expr::BinOp(l, op, r) => {
+                let mut lc = self.gen_expr(l, ctx)?;
+                let mut rc = self.gen_expr(r, ctx)?;
+                // Preserva a precedência original do husk: agrupa operandos que
+                // são eles mesmos BinOp (evita "A || B && C" virar outra coisa).
+                if matches!(**l, Expr::BinOp(..)) {
+                    lc = format!("({})", lc);
+                }
+                if matches!(**r, Expr::BinOp(..)) {
+                    rc = format!("({})", rc);
+                }
+                Ok(format!("{} {} {}", lc, go_binop(op), rc))
+            }
             Expr::Unary(op, e) => {
                 let go_op = match op {
                     UnaryOp::Not => "!",
@@ -1994,7 +2008,13 @@ func __husk_to_bool(v interface{}) bool {
 fn gen_lit(lit: &Lit) -> String {
     match lit {
         Lit::Int(n) => n.to_string(),
-        Lit::Float(f) => format!("{}", f),
+        Lit::Float(f) => {
+            if f.fract() == 0.0 {
+                format!("{:.1}", f)
+            } else {
+                format!("{}", f)
+            }
+        }
         Lit::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
         Lit::Bool(b) => b.to_string(),
     }
@@ -2100,6 +2120,52 @@ fn capitalize(s: &str) -> String {
 
 fn block_uses_body(block: &Block) -> bool {
     block.stmts.iter().any(|s| stmt_uses_body(s))
+}
+
+/// Verifica se algum statement do bloco referencia o identificador `name`
+/// em uma posição de expressão (para decidir entre `row` e `_` no for-in).
+fn block_uses_ident(block: &Block, name: &str) -> bool {
+    block.stmts.iter().any(|s| stmt_uses_ident(s, name))
+}
+
+fn stmt_uses_ident(stmt: &Stmt, name: &str) -> bool {
+    match stmt {
+        Stmt::Return(exprs) => exprs.iter().any(|e| expr_uses_ident(e, name)),
+        Stmt::Let(l) => expr_uses_ident(&l.value, name),
+        Stmt::LetMulti(l) => expr_uses_ident(&l.value, name),
+        Stmt::Expr(e) => expr_uses_ident(e, name),
+        Stmt::ForIn(f) => {
+            expr_uses_ident(&f.collection, name) || block_uses_ident(&f.body, name)
+        }
+        Stmt::If(i) => {
+            block_uses_ident(&i.then_block, name)
+                || i.else_block.as_ref().map_or(false, |b| block_uses_ident(b, name))
+        }
+        Stmt::TryLet(t) => expr_uses_ident(&t.call, name),
+        Stmt::TryCatch(tc) => {
+            block_uses_ident(&tc.try_block, name) || block_uses_ident(&tc.catch_block, name)
+        }
+        Stmt::Retry(r) => block_uses_ident(&r.body, name),
+        Stmt::Assign(a) => expr_uses_ident(&a.target, name) || expr_uses_ident(&a.value, name),
+    }
+}
+
+fn expr_uses_ident(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Ident(n) => n == name,
+        Expr::Call(c) => {
+            expr_uses_ident(&c.callee, name) || c.args.iter().any(|e| expr_uses_ident(e, name))
+        }
+        Expr::FieldAccess(e, _) => expr_uses_ident(e, name),
+        Expr::Index(o, i) => expr_uses_ident(o, name) || expr_uses_ident(i, name),
+        Expr::BinOp(l, _, r) => expr_uses_ident(l, name) || expr_uses_ident(r, name),
+        Expr::Unary(_, e) => expr_uses_ident(e, name),
+        Expr::MapLit(_) => false,
+        Expr::StructInit(_) => false,
+        Expr::Try(t) => expr_uses_ident(&t.expr, name),
+        Expr::Spread(e) => expr_uses_ident(e, name),
+        Expr::Lit(_) | Expr::Nil => false,
+    }
 }
 
 fn block_uses_body_raw(block: &Block) -> bool {
