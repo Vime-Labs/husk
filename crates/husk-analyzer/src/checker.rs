@@ -180,6 +180,50 @@ impl Checker {
             );
         }
 
+        // JSON/raw access built-ins
+        let json_builtins: &[(&str, &[(TypeInfo, &str)], &[TypeInfo])] = &[
+            ("json_parse", &[(TypeInfo::String, "s")], &[TypeInfo::Unknown]),
+            (
+                "json_parse_obj",
+                &[(TypeInfo::String, "s")],
+                &[TypeInfo::Map],
+            ),
+            (
+                "json_parse_arr",
+                &[(TypeInfo::String, "s")],
+                &[TypeInfo::List(Box::new(TypeInfo::Unknown))],
+            ),
+            (
+                "obj_get",
+                &[(TypeInfo::Unknown, "m"), (TypeInfo::String, "k")],
+                &[TypeInfo::Unknown],
+            ),
+            (
+                "body_obj",
+                &[(TypeInfo::String, "k")],
+                &[TypeInfo::Map],
+            ),
+            (
+                "body_arr",
+                &[(TypeInfo::String, "k")],
+                &[TypeInfo::List(Box::new(TypeInfo::Unknown))],
+            ),
+            ("body_raw", &[(TypeInfo::String, "k")], &[TypeInfo::Unknown]),
+        ];
+        for (name, params, returns) in json_builtins {
+            let _ = global.declare(
+                name,
+                Symbol::Function(FnSignature {
+                    params: params
+                        .iter()
+                        .map(|(t, n)| (n.to_string(), t.clone()))
+                        .collect(),
+                    return_types: returns.to_vec(),
+                }),
+                &Span { line: 0, col: 0 },
+            );
+        }
+
         Self {
             global,
             errors: Vec::new(),
@@ -629,6 +673,11 @@ impl Checker {
                 return Some(TypeInfo::Unknown)
             }
             "string" => return Some(TypeInfo::String),
+            "json_parse" | "obj_get" | "body_raw" => return Some(TypeInfo::Unknown),
+            "json_parse_obj" | "body_obj" => return Some(TypeInfo::Map),
+            "json_parse_arr" | "body_arr" => {
+                return Some(TypeInfo::List(Box::new(TypeInfo::Unknown)))
+            }
             _ => {}
         }
 

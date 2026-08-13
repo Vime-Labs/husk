@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -24,9 +25,30 @@ func toUUIDString(b [16]byte) string {
 	return string(buf[:])
 }
 
-func convertPgValue(v interface{}) interface{} {
+const (
+	pgJSONOID  = 114
+	pgJSONBOID = 3802
+)
+
+func convertPgValue(v interface{}, oid uint32) interface{} {
 	if b, ok := v.([16]byte); ok {
 		return toUUIDString(b)
+	}
+	if oid == pgJSONOID || oid == pgJSONBOID {
+		var raw []byte
+		switch t := v.(type) {
+		case []byte:
+			raw = t
+		case string:
+			raw = []byte(t)
+		}
+		if raw != nil {
+			var decoded interface{}
+			if err := json.Unmarshal(raw, &decoded); err == nil {
+				return decoded
+			}
+			return string(raw)
+		}
 	}
 	return v
 }
@@ -75,7 +97,7 @@ func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error)
 		}
 		row := make(map[string]interface{})
 		for i, col := range rows.FieldDescriptions() {
-			row[string(col.Name)] = convertPgValue(values[i])
+			row[string(col.Name)] = convertPgValue(values[i], col.DataTypeOID)
 		}
 		results = append(results, row)
 	}

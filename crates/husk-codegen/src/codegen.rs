@@ -180,6 +180,43 @@ func __husk_to_bool(v interface{}) bool {
 	if b, ok := v.(bool); ok { return b }
 	return false
 }
+func __husk_json_parse(s string) interface{} {
+	var v interface{}
+	if err := json.Unmarshal([]byte(s), &v); err != nil {
+		return nil
+	}
+	return v
+}
+func __husk_json_parse_map(s string) map[string]interface{} {
+	if m, ok := __husk_json_parse(s).(map[string]interface{}); ok {
+		return m
+	}
+	return map[string]interface{}{}
+}
+func __husk_json_parse_list(s string) []interface{} {
+	if l, ok := __husk_json_parse(s).([]interface{}); ok {
+		return l
+	}
+	return []interface{}{}
+}
+func __husk_map_get(m interface{}, k string) interface{} {
+	if mm, ok := m.(map[string]interface{}); ok {
+		return mm[k]
+	}
+	return nil
+}
+func __husk_to_map(v interface{}) map[string]interface{} {
+	if m, ok := v.(map[string]interface{}); ok {
+		return m
+	}
+	return map[string]interface{}{}
+}
+func __husk_to_list(v interface{}) []interface{} {
+	if l, ok := v.([]interface{}); ok {
+		return l
+	}
+	return []interface{}{}
+}
 
 "#);
 
@@ -198,6 +235,8 @@ func __husk_to_bool(v interface{}) bool {
         self.go_imports.borrow_mut().insert("net/http".into());
         self.go_imports.borrow_mut().insert("os/signal".into());
         self.go_imports.borrow_mut().insert("syscall".into());
+        // __husk_json_parse* helpers always emitted → json sempre usado
+        self.go_imports.borrow_mut().insert("encoding/json".into());
 
         let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
         if has_routes {
@@ -402,6 +441,14 @@ func __husk_to_bool(v interface{}) bool {
                     Expr::Ident(n) if matches!(n.as_str(), "abs" | "sqrt")
                 ) {
                     self.go_imports.borrow_mut().insert("math".into());
+                }
+                // JSON built-ins
+                if matches!(
+                    call.callee.as_ref(),
+                    Expr::Ident(n)
+                        if matches!(n.as_str(), "json_parse" | "json_parse_obj" | "json_parse_arr")
+                ) {
+                    self.go_imports.borrow_mut().insert("encoding/json".into());
                 }
                 for arg in &call.args {
                     self.scan_expr_imports(arg);
@@ -1915,6 +1962,67 @@ func __husk_to_bool(v interface{}) bool {
                         self.gen_expr(b, ctx)?
                     ));
                 }
+                "json_parse" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("json_parse() requer um argumento")
+                    })?;
+                    return Ok(format!(
+                        "__husk_json_parse({})",
+                        self.gen_expr(arg, ctx)?
+                    ));
+                }
+                "json_parse_obj" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("json_parse_obj() requer um argumento")
+                    })?;
+                    return Ok(format!(
+                        "__husk_json_parse_map({})",
+                        self.gen_expr(arg, ctx)?
+                    ));
+                }
+                "json_parse_arr" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("json_parse_arr() requer um argumento")
+                    })?;
+                    return Ok(format!(
+                        "__husk_json_parse_list({})",
+                        self.gen_expr(arg, ctx)?
+                    ));
+                }
+                "obj_get" => {
+                    let m = call.args.first().ok_or_else(|| {
+                        CodegenError::new("obj_get() requer 2 argumentos")
+                    })?;
+                    let k = call.args.get(1).ok_or_else(|| {
+                        CodegenError::new("obj_get() requer 2 argumentos")
+                    })?;
+                    return Ok(format!(
+                        "__husk_map_get({}, {})",
+                        self.gen_expr(m, ctx)?,
+                        self.gen_expr(k, ctx)?
+                    ));
+                }
+                "body_obj" => {
+                    let k = call.args.first().ok_or_else(|| {
+                        CodegenError::new("body_obj() requer a chave do campo")
+                    })?;
+                    let k_go = self.gen_expr(k, ctx)?;
+                    return Ok(format!("__husk_to_map(_huskBody[{}])", k_go));
+                }
+                "body_arr" => {
+                    let k = call.args.first().ok_or_else(|| {
+                        CodegenError::new("body_arr() requer a chave do campo")
+                    })?;
+                    let k_go = self.gen_expr(k, ctx)?;
+                    return Ok(format!("__husk_to_list(_huskBody[{}])", k_go));
+                }
+                "body_raw" => {
+                    let k = call.args.first().ok_or_else(|| {
+                        CodegenError::new("body_raw() requer a chave do campo")
+                    })?;
+                    let k_go = self.gen_expr(k, ctx)?;
+                    return Ok(format!("_huskBody[{}]", k_go));
+                }
                 _ => {}
             }
         }
@@ -2243,6 +2351,9 @@ fn expr_uses_body(expr: &Expr) -> bool {
             // require_field usa _huskBody internamente
             if let Expr::Ident(name) = c.callee.as_ref() {
                 if name == "require_field" {
+                    return true;
+                }
+                if matches!(name.as_str(), "body_obj" | "body_arr" | "body_raw") {
                     return true;
                 }
             }
@@ -3191,5 +3302,40 @@ route POST /usuarios {
         assert!(go.contains("__validate_1"));
         assert!(go.contains("w.WriteHeader(400)"));
         assert!(go.contains("w.WriteHeader(422)"));
+    }
+
+    #[test]
+    fn test_json_parse_builtins() {
+        let go = codegen(
+            r#"
+route GET /p {
+    let m = json_parse_obj("{\"a\":1}")
+    let l = json_parse_arr("[1,2]")
+    return json_parse("{\"b\":2}")
+}
+"#,
+        );
+        assert!(go.contains("func __husk_json_parse(s string) interface{} {"));
+        assert!(go.contains("__husk_json_parse_map(\"{\\\"a\\\":1}\")"));
+        assert!(go.contains("__husk_json_parse_list(\"[1,2]\")"));
+        assert!(go.contains("__husk_json_parse(\"{\\\"b\\\":2}\")"));
+    }
+
+    #[test]
+    fn test_body_raw_builtins() {
+        let go = codegen(
+            r#"
+route POST /p {
+    let m = body_obj("a")
+    let l = body_arr("itens")
+    let r = body_raw("b")
+    return json({ x: obj_get(m, "campo") })
+}
+"#,
+        );
+        assert!(go.contains("__husk_to_map(_huskBody[\"a\"])"));
+        assert!(go.contains("__husk_to_list(_huskBody[\"itens\"])"));
+        assert!(go.contains("_huskBody[\"b\"]"));
+        assert!(go.contains("__husk_map_get(m, \"campo\")"));
     }
 }
