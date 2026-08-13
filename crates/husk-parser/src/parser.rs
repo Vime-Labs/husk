@@ -536,8 +536,15 @@ impl Parser {
         while matches!(self.current_kind(), TokenKind::Minus)
             && matches!(
                 self.peek_next_kind(),
-                Some(TokenKind::Ident(_)) | Some(TokenKind::Int(_))
+                Some(TokenKind::Ident(_))
+                    | Some(TokenKind::Int(_))
+                    | Some(TokenKind::Float(_))
             )
+            || matches!(self.current_kind(), TokenKind::Minus)
+                && self
+                    .peek_next_kind()
+                    .and_then(|k| k.keyword_name())
+                    .is_some()
         {
             self.advance(); // consome o '-'
             match self.current_kind().clone() {
@@ -551,7 +558,21 @@ impl Parser {
                     lit.push('-');
                     lit.push_str(&n.to_string());
                 }
-                _ => unreachable!(),
+                TokenKind::Float(n) => {
+                    self.advance();
+                    lit.push('-');
+                    lit.push_str(&n.to_string());
+                }
+                other => {
+                    // keyword como segmento com hífen (ex.: categorize-import)
+                    if let Some(kw) = other.keyword_name() {
+                        self.advance();
+                        lit.push('-');
+                        lit.push_str(kw);
+                    } else {
+                        break;
+                    }
+                }
             }
         }
     }
