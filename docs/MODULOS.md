@@ -346,6 +346,74 @@ A opção `form` tem prioridade sobre `multipart` e body JSON — quando present
 
 ---
 
+## Interop Go (go imports e blocos inline)
+
+Nem tudo precisa (ou deve) ser escrito em Husk. Para bibliotecas Go de terceiros, lógica de negócio complexa ou trechos que ficam melhores em Go puro, o Husk oferece duas formas de interop — o mesmo mecanismo usado pelos módulos da stdlib (`env`, `postgres`, etc.): o arquivo Go é copiado para o build dir e compilado junto com o `main.go` gerado, no mesmo `package main`.
+
+### `go "arquivo.go" as alias` — arquivos Go do projeto
+
+```husk
+go "lib/projecoes.go" as projecoes
+```
+
+- O caminho é relativo ao arquivo `.husk` (ou absoluto). O arquivo deve começar com `package main`.
+- Chamadas `alias.metodo(...)` viram `{alias}_{metodo}(...)` no Go — o mesmo contrato dos shims da stdlib:
+  `projecoes.dias_uteis(...)` → `projecoes_dias_uteis(...)`.
+- Erros funcionam de graça: retornos `(T, error)` casam com `let x, err = ...` e com o operador `?`.
+- Imports Go dentro do arquivo (`github.com/...`) são resolvidos pelo `go mod tidy` que já roda no build.
+
+```husk
+go "lib/projecoes.go" as projecoes
+
+route GET /projecoes/dias-uteis -> ctx {
+    let inicio = req.query["inicio"]
+    let fim    = req.query["fim"]
+    let dias   = projecoes.dias_uteis(inicio, fim)? 400 "intervalo de datas inválido"
+    return json({ dias_uteis: dias })
+}
+```
+
+### `go { ... }` — blocos inline
+
+Trechos pequenos podem ficar no próprio `.husk`:
+
+```husk
+go {
+    func cpf_mascarar(cpf string) string {
+        if len(cpf) != 11 {
+            return cpf
+        }
+        return cpf[:3] + ".***.***-" + cpf[9:]
+    }
+}
+
+route GET /utils/mask -> ctx {
+    return cpf_mascarar("12345678901")
+}
+```
+
+- Cada bloco vira um arquivo `husk_go_block_N.go` no build (imports no topo do bloco são válidos).
+- Funções top-level são chamáveis diretamente, sem alias: `cpf_mascarar(...)`.
+- Métodos (`func (x T) Nome`) e blocos aninhados não são expostos ao Husk.
+- O conteúdo é preservado como está — o formatter (`husk fmt`) trata blocos `go` como opacos.
+
+### Contrato de tipos
+
+| Origem do valor | Tipo Go que chega | Como usar no `.go` |
+|---|---|---|
+| Literais, route params `<int>`, `parse_int(...)` | `int`, `float64`, `string`, `bool` | parâmetro tipado direto |
+| `req.body["campo"]` | `string` (conversão segura) | `__husk_to_string(...)` na fronteira ou aceite `string` |
+| `body_raw("campo")` | valor JSON bruto (`interface{}`: `float64`, `string`, ...) | converta com um helper local (`toFloat`/`toInt`) |
+| Retorno "dinâmico" | deve ser `interface{}`, `map[string]interface{}` ou `[]interface{}` | serializa com `json()` automaticamente |
+
+**Resumo**: a função Go recebe o que o Husk manda (veja a tabela) e devolve tipos que o `json()` entende, ou `(T, error)` para usar `?`.
+
+### Erros de compilação
+
+Erros dentro de arquivos Go do usuário são exibidos com o caminho original no projeto (`lib/projecoes.go:12:34: ...`), sem mapeamento para linhas `.husk` — o source map só existe para o código gerado.
+
+---
+
 ## Importações circulares
 
 Não são permitidas em módulos do projeto. O transpiler detecta ciclos e interrompe com erro.

@@ -29,6 +29,10 @@ pub struct Codegen {
     user_aliases: HashSet<String>,
     /// alias de módulos stdlib: `alias.fn()` → `alias_fn()`
     stdlib_aliases: HashSet<String>,
+    /// aliases de `go "arquivo.go" as alias` — chamadas viram `{alias}_{metodo}(...)`
+    go_aliases: HashSet<String>,
+    /// blocos `go { ... }` — código Go bruto emitido em arquivo separado pelo CLI
+    go_blocks: RefCell<Vec<String>>,
     /// Contador para nomes únicos de variáveis _huskCtx
     ctx_var_counter: Cell<usize>,
     /// Contador para nomes únicos de variáveis __tryN
@@ -59,6 +63,8 @@ impl Codegen {
             go_imports: RefCell::new(BTreeSet::new()),
             user_aliases: HashSet::new(),
             stdlib_aliases: HashSet::new(),
+            go_aliases: HashSet::new(),
+            go_blocks: RefCell::new(Vec::new()),
             ctx_var_counter: Cell::new(0),
             try_var_counter: Cell::new(0),
             pending_try: RefCell::new(Vec::new()),
@@ -80,6 +86,12 @@ impl Codegen {
     /// Retorna o mapa de source maps: lista de (linha_go, arquivo_husk, linha_husk)
     pub fn get_source_map(&self) -> Vec<(usize, String, usize)> {
         self.source_map.borrow().clone()
+    }
+
+    /// Blocos `go { ... }` coletados durante a geração — o CLI escreve cada um
+    /// em um arquivo `husk_go_block_N.go` no build dir.
+    pub fn go_blocks(&self) -> Vec<String> {
+        self.go_blocks.borrow().clone()
     }
 
     fn source_map_comment(&self, line: usize) -> String {
@@ -114,6 +126,9 @@ impl Codegen {
                     self.user_aliases.insert(imp.alias.clone());
                 }
             }
+            if let Item::GoImport(g) = item {
+                self.go_aliases.insert(g.alias.clone());
+            }
         }
 
         self.collect_go_imports(program);
@@ -130,6 +145,8 @@ impl Codegen {
                 Item::Import(_) => {}
                 Item::CorsDef(_) => {}
                 Item::ModelDef(m) => body.push_str(&self.gen_model_def(m)?),
+                Item::GoImport(_) => {} // arquivo Go é copiado pelo CLI
+                Item::GoBlock(b) => self.go_blocks.borrow_mut().push(b.source.clone()),
             }
         }
 
@@ -2080,21 +2097,16 @@ func __husk_to_list(v interface{}) []interface{} {
         // alias.metodo(args)
         // stdlib: env.get(x) → env_get(x)
         // usuário: usuarios.listar() → listar()
+        // go: projecoes.dias_uteis(x) → projecoes_dias_uteis(x)
         if let Expr::FieldAccess(receiver, method) = call.callee.as_ref() {
             if let Expr::Ident(alias) = receiver.as_ref() {
-                let fn_name = if self.stdlib_aliases.contains(alias.as_str()) {
-                    format!("{}_{}", alias, method)
-                } else if self.user_aliases.contains(alias.as_str()) {
-                    format!("{}_{}", alias, method)
-                } else {
-                    method.clone()
-                };
-                let params = self.fn_params.get(&fn_name).map(|p| p.as_slice());
-                let args = self.gen_args(&call.args, ctx, params)?;
-                if self.stdlib_aliases.contains(alias.as_str()) {
-                    return Ok(format!("{}_{}({})", alias, method, args));
-                }
-                if self.user_aliases.contains(alias.as_str()) {
+                let known = self.stdlib_aliases.contains(alias.as_str())
+                    || self.user_aliases.contains(alias.as_str())
+                    || self.go_aliases.contains(alias.as_str());
+                if known {
+                    let fn_name = format!("{}_{}", alias, method);
+                    let params = self.fn_params.get(&fn_name).map(|p| p.as_slice());
+                    let args = self.gen_args(&call.args, ctx, params)?;
                     return Ok(format!("{}_{}({})", alias, method, args));
                 }
             }
@@ -2482,6 +2494,66 @@ route GET /hello {
         assert!(go.contains("func greeting() string {"));
         assert!(go.contains("r.Get(\"/hello\""));
         assert!(go.contains("json.NewEncoder(w).Encode(greeting())"));
+    }
+
+    #[test]
+    fn test_go_import_alias_call() {
+        let go = codegen(
+            r#"
+go "lib/projecoes.go" as projecoes
+route GET /p {
+    let x = projecoes.dias_uteis("2026-08-01", "2026-08-13")?
+    return json({ x: x })
+}
+"#,
+        );
+        // alias.metodo() → {alias}_{metodo}() — mesmo contrato dos shims stdlib
+        assert!(go.contains("projecoes_dias_uteis(\"2026-08-01\", \"2026-08-13\")"));
+        assert!(go.contains("x := __try1_val"));
+    }
+
+    #[test]
+    fn test_go_import_multi_retorno() {
+        let go = codegen(
+            r#"
+go "lib/x.go" as x
+fn f() string {
+    let val, err = x.calcular(1)
+    if err != nil {
+        return err.message
+    }
+    return val
+}
+"#,
+        );
+        assert!(go.contains("val, err := x_calcular(1)"));
+        assert!(go.contains("err.Error()"));
+    }
+
+    #[test]
+    fn test_go_block_nao_emite_no_main() {
+        // blocos go { ... } não vão para o main.go — são coletados via go_blocks()
+        let go = codegen(
+            "go {\nfunc cpf_mascarar(c string) string {\n    return c\n}\n}\nfn f() string {\n    return \"x\"\n}\n",
+        );
+        assert!(!go.contains("cpf_mascarar"));
+        assert!(!go.contains("func cpf_mascarar"));
+    }
+
+    #[test]
+    fn test_go_block_collected() {
+        let mut cg = Codegen::new();
+        let tokens = Lexer::new(
+            "go {\nfunc cpf_mascarar(c string) string {\n    return c\n}\n}\n\ngo {\nfunc outro() int { return 1 }\n}\n",
+        )
+        .tokenize()
+        .unwrap();
+        let program = Parser::new(tokens).parse().unwrap();
+        cg.generate(&program).unwrap();
+        let blocks = cg.go_blocks();
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].contains("cpf_mascarar"));
+        assert!(blocks[1].contains("outro"));
     }
 
     #[test]

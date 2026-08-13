@@ -246,4 +246,36 @@ schema Usuario {
         assert!(matches!(s.fields[2].validators[0], Validator::Min(18)));
         assert!(matches!(s.fields[2].validators[1], Validator::Max(120)));
     }
+
+    #[test]
+    fn test_go_import() {
+        let prog = parse(r#"go "lib/projecoes.go" as projecoes"#);
+        assert_eq!(prog.items.len(), 1);
+        let Item::GoImport(g) = &prog.items[0] else {
+            panic!("esperado GoImport")
+        };
+        assert_eq!(g.path, "lib/projecoes.go");
+        assert_eq!(g.alias, "projecoes");
+    }
+
+    #[test]
+    fn test_go_block() {
+        let prog = parse("go {\nfunc cpf_mascarar(c string) string {\n    return c\n}\n}\n");
+        assert_eq!(prog.items.len(), 1);
+        let Item::GoBlock(b) = &prog.items[0] else {
+            panic!("esperado GoBlock")
+        };
+        assert!(b.source.contains("func cpf_mascarar"));
+    }
+
+    #[test]
+    fn test_go_import_e_block_juntos() {
+        let prog = parse(
+            "go \"lib/x.go\" as x\ngo {\nfunc y() int { return 1 }\n}\nroute GET /p {\n    return x.f()\n}\n",
+        );
+        assert_eq!(prog.items.len(), 3);
+        assert!(matches!(prog.items[0], Item::GoImport(_)));
+        assert!(matches!(prog.items[1], Item::GoBlock(_)));
+        assert!(matches!(prog.items[2], Item::RouteDef(_)));
+    }
 }

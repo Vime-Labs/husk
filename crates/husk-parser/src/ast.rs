@@ -15,6 +15,10 @@ pub enum Item {
     CorsDef(CorsDef),
     SchemaDef(SchemaDef),
     ModelDef(ModelDef),
+    /// go "caminho/arquivo.go" as alias — importa um arquivo Go puro
+    GoImport(GoImportDef),
+    /// go { ... } — bloco Go inline (código bruto)
+    GoBlock(GoBlockDef),
 }
 
 /// cors { origins: [...] methods: [...] headers: [...] }
@@ -103,6 +107,22 @@ pub struct ImportDef {
     pub alias: String,
     /// true para `import "husk/..."` — módulo da stdlib
     pub is_stdlib: bool,
+    pub span: Span,
+}
+
+/// go "path.go" as alias — arquivo Go copiado para o build e chamável via `alias.metodo()`
+#[derive(Debug, Clone)]
+pub struct GoImportDef {
+    /// caminho relativo ao arquivo .husk ou absoluto (após resolução)
+    pub path: String,
+    pub alias: String,
+    pub span: Span,
+}
+
+/// go { ... } — código Go bruto emitido em arquivo separado no build
+#[derive(Debug, Clone)]
+pub struct GoBlockDef {
+    pub source: String,
     pub span: Span,
 }
 

@@ -413,4 +413,52 @@ fn f(x int) {
         assert!(!errors.is_empty());
         assert!(errors[0].message.contains("lista ou map"));
     }
+
+    // ---- interop Go ----
+
+    #[test]
+    fn test_go_import_alias_modulo() {
+        analyze_src_ok(
+            r#"
+go "lib/projecoes.go" as projecoes
+route GET /p {
+    let x = projecoes.dias_uteis("2026-08-01", "2026-08-13")?
+    return json({ x: x })
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_go_block_funcoes_diretas() {
+        analyze_src_ok(
+            r#"
+go {
+func cpf_mascarar(c string) string {
+    return c
+}
+}
+route GET /p {
+    return cpf_mascarar("12345678901")
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn test_go_block_metodos_ignorados() {
+        // métodos (func (x T) Nome) não são extraídos como funções top-level
+        analyze_src_ok(
+            r#"
+go {
+func (s *Servico) metodo() string {
+    return s.x
+}
+}
+route GET /p {
+    return "ok"
+}
+"#,
+        );
+    }
 }

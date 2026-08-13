@@ -47,6 +47,14 @@ struct StdlibDeps {
     has_cors: bool,
 }
 
+/// Arquivos e blocos Go puros declarados no Husk (`go "x.go" as alias` e `go { ... }`)
+struct GoInterop {
+    /// (alias, caminho absoluto do arquivo .go)
+    files: Vec<(String, PathBuf)>,
+    /// blocos inline `go { ... }` — cada um vira um arquivo husk_go_block_N.go
+    blocks: Vec<String>,
+}
+
 impl StdlibDeps {
     fn from_program(program: &Program) -> Self {
         let modules = program
@@ -167,8 +175,8 @@ fn main() {
 
 fn cmd_run(args: &[String]) {
     let file = require_file(args);
-    let (go_code, stdlib) = transpile_file(file);
-    let dir = prepare_go_dir(file, &go_code, &stdlib);
+    let (go_code, stdlib, interop) = transpile_file(file);
+    let dir = prepare_go_dir(file, &go_code, &stdlib, &interop);
 
     step("dependências", "resolvendo...");
     let start = Instant::now();
@@ -197,8 +205,8 @@ fn cmd_build(args: &[String]) {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let (go_code, stdlib) = transpile_file(file);
-    let dir = prepare_go_dir(file, &go_code, &stdlib);
+    let (go_code, stdlib, interop) = transpile_file(file);
+    let dir = prepare_go_dir(file, &go_code, &stdlib, &interop);
 
     step("dependências", "resolvendo...");
     go_mod_tidy(&dir, file);
@@ -219,7 +227,7 @@ fn cmd_build(args: &[String]) {
         ));
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let translated = translate_go_errors(&stderr, &dir.join("main.go"), file);
+        let translated = translate_go_errors(&stderr, &dir.join("main.go"), file, &interop.files);
         eprint!("{}", translated);
         process::exit(1);
     }
@@ -228,7 +236,13 @@ fn cmd_build(args: &[String]) {
 fn cmd_check(args: &[String]) {
     let file = require_file(args);
     let start = Instant::now();
-    transpile_file(file); // check: só valida sintaxe/codegen, descarta saída
+    let (_go, _stdlib, interop) = transpile_file(file); // check: só valida sintaxe/codegen
+    // valida existência dos arquivos go referenciados
+    for (_alias, path) in &interop.files {
+        if !path.exists() {
+            die(&format!("go: arquivo não encontrado: '{}'", path.display()));
+        }
+    }
     ok(&format!(
         "{BOLD}{file}{RESET} {DIM}({:.0}ms){RESET}",
         start.elapsed().as_millis()
@@ -782,8 +796,8 @@ fn cmd_dev(args: &[String]) {
 }
 
 fn start_dev_server(file: &str) -> Option<process::Child> {
-    let (go_code, stdlib) = transpile_file(file);
-    let dir = prepare_go_dir(file, &go_code, &stdlib);
+    let (go_code, stdlib, interop) = transpile_file(file);
+    let dir = prepare_go_dir(file, &go_code, &stdlib, &interop);
     go_mod_tidy(&dir, file);
 
     match Command::new("go")
@@ -979,7 +993,7 @@ fn cmd_new(args: &[String]) {
 
 // --- transpilação ---
 
-fn transpile_file(file: &str) -> (String, StdlibDeps) {
+fn transpile_file(file: &str) -> (String, StdlibDeps, GoInterop) {
     let step_start = Instant::now();
     step("transpilando", file);
 
@@ -1001,6 +1015,19 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
     let merged = resolve_imports(program, base_dir, &mut visited, &mut processing, file);
     let stdlib = StdlibDeps::from_program(&merged);
 
+    // interop Go: arquivos a copiar + blocos inline
+    let mut interop = GoInterop {
+        files: Vec::new(),
+        blocks: Vec::new(),
+    };
+    for item in &merged.items {
+        match item {
+            Item::GoImport(g) => interop.files.push((g.alias.clone(), PathBuf::from(&g.path))),
+            Item::GoBlock(b) => interop.blocks.push(b.source.clone()),
+            _ => {}
+        }
+    }
+
     let mut codegen = Codegen::new();
     codegen.set_source_file(file);
     let go_code = codegen
@@ -1012,7 +1039,7 @@ fn transpile_file(file: &str) -> (String, StdlibDeps) {
         step_start.elapsed().as_millis()
     ));
 
-    (go_code, stdlib)
+    (go_code, stdlib, interop)
 }
 
 fn parse_source(source: &str, file: &str) -> Program {
@@ -1055,6 +1082,16 @@ fn resolve_imports(
     processing: &mut HashSet<PathBuf>,
     current_file: &str,
 ) -> Program {
+    // go imports: rebaseia o caminho relativo ao diretório do arquivo atual
+    for item in program.items.iter_mut() {
+        if let Item::GoImport(g) = item {
+            let p = Path::new(&g.path);
+            if !p.is_absolute() {
+                g.path = base_dir.join(p).to_string_lossy().to_string();
+            }
+        }
+    }
+
     let imports: Vec<_> = program
         .items
         .iter()
@@ -1119,6 +1156,8 @@ fn resolve_imports(
                     f.name = format!("{}_{}", imp.alias, f.name);
                     program.items.push(Item::FnDef(f));
                 }
+                // go imports e blocos também são propagados (paths já rebaseados)
+                Item::GoImport(_) | Item::GoBlock(_) => program.items.push(item),
                 Item::StructDef(_) => program.items.push(item),
                 _ => {}
             }
@@ -1130,7 +1169,7 @@ fn resolve_imports(
 
 // --- Go helpers ---
 
-fn prepare_go_dir(husk_file: &str, go_code: &str, stdlib: &StdlibDeps) -> PathBuf {
+fn prepare_go_dir(husk_file: &str, go_code: &str, stdlib: &StdlibDeps, interop: &GoInterop) -> PathBuf {
     let stem = Path::new(husk_file)
         .file_stem()
         .unwrap_or_default()
@@ -1140,6 +1179,56 @@ fn prepare_go_dir(husk_file: &str, go_code: &str, stdlib: &StdlibDeps) -> PathBu
     fs::create_dir_all(&dir).expect("falha ao criar diretório temporário");
 
     write_file(&dir.join("main.go"), go_code);
+
+    // nomes reservados: gerados pelo husk ou pelos shims da stdlib
+    let mut reserved: HashSet<String> = ["main.go", "go.mod", "go.sum"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if stdlib.has("husk/env") { reserved.insert("husk_stdlib_env.go".into()); }
+    if stdlib.has("husk/postgres") { reserved.insert("husk_stdlib_postgres.go".into()); }
+    if stdlib.has("husk/crypto") { reserved.insert("husk_stdlib_crypto.go".into()); }
+    if stdlib.has("husk/jwt") { reserved.insert("husk_stdlib_jwt.go".into()); }
+    if stdlib.has("husk/log") { reserved.insert("husk_stdlib_log.go".into()); }
+    if stdlib.has("husk/http") { reserved.insert("husk_stdlib_http.go".into()); }
+    if stdlib.has("husk/s3") { reserved.insert("husk_stdlib_s3.go".into()); }
+    if stdlib.has("husk/migrate") { reserved.insert("husk_stdlib_migrate.go".into()); }
+
+    // arquivos Go do usuário (go "caminho/arquivo.go" as alias)
+    for (_alias, src_path) in &interop.files {
+        if !src_path.exists() {
+            die(&format!(
+                "go: arquivo não encontrado: '{}'",
+                src_path.display()
+            ));
+        }
+        let content = fs::read_to_string(src_path)
+            .unwrap_or_else(|e| die(&format!("go: erro ao ler '{}': {e}", src_path.display())));
+        if !content.trim_start().starts_with("package ") {
+            die(&format!(
+                "go: '{}' deve começar com 'package main'",
+                src_path.display()
+            ));
+        }
+        let name = src_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if !reserved.insert(name.clone()) {
+            die(&format!(
+                "go: nome de arquivo '{}' conflita com arquivos gerados pelo husk",
+                name
+            ));
+        }
+        write_file(&dir.join(&name), &content);
+    }
+
+    // blocos inline go { ... } — um arquivo por bloco (imports no topo do bloco são válidos)
+    for (i, block) in interop.blocks.iter().enumerate() {
+        let name = format!("husk_go_block_{}.go", i);
+        write_file(&dir.join(&name), &format!("package main\n\n{}\n", block));
+    }
 
     let go_mod = format!(
         "module husk_out\n\ngo 1.21\n\nrequire (\n{})\n",
@@ -1209,7 +1298,14 @@ fn require_file<'a>(args: &'a [String]) -> &'a str {
 
 /// Traduz erros do compilador Go (linhas em main.go) de volta para
 /// as linhas do código .husk original usando os source maps embutidos.
-fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String {
+/// Erros em arquivos Go do usuário (interop) têm o nome de arquivo remapeado
+/// para o caminho original no projeto.
+fn translate_go_errors(
+    stderr: &str,
+    go_file: &Path,
+    _husk_file: &str,
+    interop_files: &[(String, PathBuf)],
+) -> String {
     // Lê o Go gerado e constrói mapa: linha_go → (arquivo_husk, linha_husk)
     let go_source = match fs::read_to_string(go_file) {
         Ok(s) => s,
@@ -1231,9 +1327,15 @@ fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String
         }
     }
 
-    if line_map.is_empty() {
-        return stderr.to_string();
-    }
+    // Arquivos go do usuário: basename no build dir → caminho original
+    let file_map: std::collections::HashMap<&str, &Path> = interop_files
+        .iter()
+        .filter_map(|(_, p)| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| (n, p.as_path()))
+        })
+        .collect();
 
     let mut result = String::new();
     for line in stderr.lines() {
@@ -1258,6 +1360,24 @@ fn translate_go_errors(stderr: &str, go_file: &Path, _husk_file: &str) -> String
                         continue;
                     }
                 }
+            }
+        }
+        // Arquivos Go do usuário: remapeia para o caminho original
+        else {
+            let mut remapped = false;
+            for (base, orig) in &file_map {
+                if let Some(rest) = line.strip_prefix(&format!("{}:", base)) {
+                    result.push_str(&format!(
+                        "{RED}{BOLD}{}{RESET}:{}\n",
+                        orig.display(),
+                        rest
+                    ));
+                    remapped = true;
+                    break;
+                }
+            }
+            if remapped {
+                continue;
             }
         }
         result.push_str(line);

@@ -48,9 +48,16 @@ impl Parser {
             TokenKind::Cors => Ok(Item::CorsDef(self.parse_cors()?)),
             TokenKind::Schema => Ok(Item::SchemaDef(self.parse_schema()?)),
             TokenKind::Model => Ok(Item::ModelDef(self.parse_model()?)),
+            TokenKind::Go => Ok(Item::GoImport(self.parse_go_import()?)),
+            TokenKind::GoBlock(src) => {
+                let span = self.current_span();
+                let source = src.clone();
+                self.advance();
+                Ok(Item::GoBlock(GoBlockDef { source, span }))
+            }
             _ => Err(ParseError::new(
                 format!(
-                    "esperado item top-level (fn/route/struct/import/middleware/cors), encontrado {:?}",
+                    "esperado item top-level (fn/route/struct/import/middleware/cors/go), encontrado {:?}",
                     self.current_kind()
                 ),
                 self.current_span(),
@@ -270,6 +277,30 @@ impl Parser {
         })
     }
 
+    /// go "caminho/arquivo.go" as alias — importa arquivo Go puro
+    fn parse_go_import(&mut self) -> Result<GoImportDef, ParseError> {
+        let span = self.current_span();
+        self.expect(TokenKind::Go)?;
+        let path = match self.current_kind().clone() {
+            TokenKind::Str(s) => {
+                self.advance();
+                s
+            }
+            _ => {
+                return Err(ParseError::new(
+                    format!(
+                        "esperado caminho string após 'go' (go \"arquivo.go\" as alias), encontrado {:?}",
+                        self.current_kind()
+                    ),
+                    self.current_span(),
+                ));
+            }
+        };
+        self.expect(TokenKind::As)?;
+        let alias = self.expect_ident()?;
+        Ok(GoImportDef { path, alias, span })
+    }
+
     // middleware nome { corpo }
     fn parse_middleware(&mut self) -> Result<MiddlewareDef, ParseError> {
         let span = self.current_span();
@@ -463,27 +494,7 @@ impl Parser {
                     self.advance();
                     // suporte a hífens em segmentos de rota: request-code -> "request-code"
                     let mut lit = name;
-                    while matches!(self.current_kind(), TokenKind::Minus)
-                        && matches!(
-                            self.peek_next_kind(),
-                            Some(TokenKind::Ident(_)) | Some(TokenKind::Int(_))
-                        )
-                    {
-                        self.advance(); // consome o '-'
-                        match self.current_kind().clone() {
-                            TokenKind::Ident(part) => {
-                                self.advance();
-                                lit.push('-');
-                                lit.push_str(&part);
-                            }
-                            TokenKind::Int(n) => {
-                                self.advance();
-                                lit.push('-');
-                                lit.push_str(&n.to_string());
-                            }
-                            _ => unreachable!(),
-                        }
-                    }
+                    self.parse_route_segment_with_hyphens(&mut lit);
                     segments.push(PathSegment::Literal(lit));
                 }
                 TokenKind::Colon => {
@@ -509,7 +520,10 @@ impl Parser {
                 other => {
                     if let Some(kw) = other.keyword_name() {
                         self.advance();
-                        segments.push(PathSegment::Literal(kw.to_string()));
+                        // suporte a hífens após keyword: import-profiles, e2e-test...
+                        let mut lit = kw.to_string();
+                        self.parse_route_segment_with_hyphens(&mut lit);
+                        segments.push(PathSegment::Literal(lit));
                     } else {
                         break;
                     }
@@ -518,6 +532,30 @@ impl Parser {
         }
         Ok(RoutePath { segments })
     }
+    fn parse_route_segment_with_hyphens(&mut self, lit: &mut String) {
+        while matches!(self.current_kind(), TokenKind::Minus)
+            && matches!(
+                self.peek_next_kind(),
+                Some(TokenKind::Ident(_)) | Some(TokenKind::Int(_))
+            )
+        {
+            self.advance(); // consome o '-'
+            match self.current_kind().clone() {
+                TokenKind::Ident(part) => {
+                    self.advance();
+                    lit.push('-');
+                    lit.push_str(&part);
+                }
+                TokenKind::Int(n) => {
+                    self.advance();
+                    lit.push('-');
+                    lit.push_str(&n.to_string());
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
 
     fn parse_block(&mut self) -> Result<Block, ParseError> {
         self.expect(TokenKind::LBrace)?;

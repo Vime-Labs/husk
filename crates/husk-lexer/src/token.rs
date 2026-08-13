@@ -35,6 +35,10 @@ pub enum TokenKind {
     Schema,
     Required,
     Model,
+    /// go "path.go" as alias — import de arquivo Go
+    Go,
+    /// go { ... } — bloco Go inline (conteúdo bruto entre as chaves)
+    GoBlock(String),
 
     // Métodos HTTP
     Get,
@@ -124,6 +128,7 @@ impl TokenKind {
             TokenKind::Schema => Some("schema"),
             TokenKind::Required => Some("required"),
             TokenKind::Model => Some("model"),
+            TokenKind::Go => Some("go"),
             TokenKind::Get => Some("get"),
             TokenKind::Post => Some("post"),
             TokenKind::Put => Some("put"),

@@ -36,6 +36,8 @@ fn item_start_line(item: &Item) -> usize {
         Item::CorsDef(c) => c.span.line,
         Item::SchemaDef(s) => s.span.line,
         Item::ModelDef(m) => m.span.line,
+        Item::GoImport(g) => g.span.line,
+        Item::GoBlock(b) => b.span.line,
     }
 }
 
@@ -89,6 +91,8 @@ fn format_item(item: &Item, out: &mut String, indent: usize) {
         Item::CorsDef(c) => format_cors_def(c, out, indent),
         Item::SchemaDef(s) => format_schema_def(s, out, indent),
         Item::ModelDef(m) => format_model_def(m, out, indent),
+        Item::GoImport(g) => format_go_import(g, out, indent),
+        Item::GoBlock(b) => format_go_block(b, out, indent),
     }
 }
 
@@ -125,6 +129,14 @@ fn format_item_with_cursor(item: &Item, cursor: &mut CommentCursor, out: &mut St
         Item::ModelDef(m) => {
             cursor.emit_before_line(m.span.line, indent, out);
             format_model_def(m, out, indent);
+        }
+        Item::GoImport(g) => {
+            cursor.emit_before_line(g.span.line, indent, out);
+            format_go_import(g, out, indent);
+        }
+        Item::GoBlock(b) => {
+            cursor.emit_before_line(b.span.line, indent, out);
+            format_go_block(b, out, indent);
         }
     }
 }
@@ -226,6 +238,18 @@ fn format_import(imp: &ImportDef, out: &mut String, indent: usize) {
         out.push_str(&format!("{}import \"{}\" as {}", i, imp.path, imp.alias));
     }
     out.push('\n');
+}
+
+fn format_go_import(g: &GoImportDef, out: &mut String, indent: usize) {
+    let i = indent_str(indent);
+    out.push_str(&format!("{}go \"{}\" as {}", i, g.path, g.alias));
+    out.push('\n');
+}
+
+/// Blocos go são opacos para o formatter — o conteúdo Go é preservado como está.
+fn format_go_block(b: &GoBlockDef, out: &mut String, indent: usize) {
+    let i = indent_str(indent);
+    out.push_str(&format!("{}go {{\n{}{}\n{}}}\n", i, i, b.source, i));
 }
 
 fn format_cors_def(c: &CorsDef, out: &mut String, indent: usize) {
@@ -685,5 +709,21 @@ mod tests {
         let prog = parse(src);
         let formatted = format_program_with_source(&prog, src);
         assert_eq!(formatted, src);
+    }
+
+    #[test]
+    fn test_format_go_import() {
+        let src = "go \"lib/projecoes.go\" as projecoes\n";
+        let prog = parse(src);
+        let formatted = format_program(&prog);
+        assert_eq!(formatted.trim(), src.trim());
+    }
+
+    #[test]
+    fn test_format_go_block() {
+        let src = "go {\nfunc a() string {\n    return \"a\"\n}\n}\n";
+        let prog = parse(src);
+        let formatted = format_program(&prog);
+        assert_eq!(formatted.trim(), src.trim());
     }
 }

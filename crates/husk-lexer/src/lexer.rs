@@ -44,6 +44,16 @@ impl Lexer {
 
         let ch = self.current();
 
+        // go-block: a palavra "go" seguida de '{' captura o código Go bruto
+        if (ch.is_alphabetic() || ch == '_') && self.starts_with_word("go") {
+            if self.peek_significant_after_word() == Some('{') {
+                self.advance(); // 'g'
+                self.advance(); // 'o'
+                let kind = self.lex_go_block()?;
+                return Ok(Token { kind, span });
+            }
+        }
+
         // comentário de linha: //
         if ch == '/' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == '/' {
             return Ok(Token {
@@ -285,6 +295,7 @@ impl Lexer {
             "import" => TokenKind::Import,
             "as" => TokenKind::As,
             "struct" => TokenKind::Struct,
+            "go" => TokenKind::Go,
             "GET" => TokenKind::Get,
             "POST" => TokenKind::Post,
             "PUT" => TokenKind::Put,
@@ -331,6 +342,211 @@ impl Lexer {
             self.advance();
         }
         content
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.input.get(self.pos + 1).copied()
+    }
+
+    /// Verifica se a palavra (ident) atual é exatamente `word`, com fronteira
+    /// de identificador após ela (ex.: "go" sim, "gorilla" não).
+    fn starts_with_word(&self, word: &str) -> bool {
+        let w: Vec<char> = word.chars().collect();
+        if self.pos + w.len() > self.input.len() {
+            return false;
+        }
+        for (i, c) in w.iter().enumerate() {
+            if self.input[self.pos + i] != *c {
+                return false;
+            }
+        }
+        if let Some(&next) = self.input.get(self.pos + w.len()) {
+            !(next.is_alphanumeric() || next == '_')
+        } else {
+            true
+        }
+    }
+
+    /// Olha à frente (sem consumir) o próximo caractere significativo após a
+    /// palavra atual, ignorando espaços e comentários.
+    fn peek_significant_after_word(&self) -> Option<char> {
+        let mut i = self.pos + 2; // depois de "go"
+        let mut in_block_comment = false;
+        while i < self.input.len() {
+            let c = self.input[i];
+            if in_block_comment {
+                if c == '*' && i + 1 < self.input.len() && self.input[i + 1] == '/' {
+                    i += 2;
+                    in_block_comment = false;
+                } else {
+                    i += 1;
+                }
+                continue;
+            }
+            if c.is_whitespace() {
+                i += 1;
+                continue;
+            }
+            if c == '/' && i + 1 < self.input.len() && self.input[i + 1] == '/' {
+                while i < self.input.len() && self.input[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if c == '/' && i + 1 < self.input.len() && self.input[i + 1] == '*' {
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
+            return Some(c);
+        }
+        None
+    }
+
+    /// Pula espaços e comentários sem emitir tokens (usado antes de um go-block).
+    fn skip_go_trivia(&mut self) {
+        loop {
+            self.skip_whitespace();
+            if self.current_is('/') && self.peek_next() == Some('/') {
+                while self.pos < self.input.len() && self.current() != '\n' {
+                    self.advance();
+                }
+                continue;
+            }
+            if self.current_is('/') && self.peek_next() == Some('*') {
+                self.advance();
+                self.advance();
+                while self.pos + 1 < self.input.len()
+                    && !(self.current() == '*' && self.peek_next() == Some('/'))
+                {
+                    self.advance();
+                }
+                if self.pos + 1 < self.input.len() {
+                    self.advance();
+                    self.advance();
+                }
+                continue;
+            }
+            break;
+        }
+    }
+
+    /// Captura o conteúdo bruto de um bloco `go { ... }` (sem as chaves externas).
+    /// O scanner entende strings, raw strings e comentários do Go para não
+    /// confundir chaves dentro de literais/comentários com o fim do bloco.
+    fn lex_go_block(&mut self) -> Result<TokenKind, LexError> {
+        self.skip_go_trivia();
+        if !self.current_is('{') {
+            return Err(LexError {
+                message: "esperado '{' após 'go' para bloco Go".into(),
+                span: self.span(),
+            });
+        }
+        let start = self.pos;
+        let mut depth: i64 = 0;
+        let mut in_str = false;     // "..."
+        let mut in_raw = false;     // `...`
+        let mut in_char = false;    // '...'
+        let mut in_line_c = false;  // //...
+        let mut in_block_c = false; // /*...*/
+
+        while self.pos < self.input.len() {
+            let c = self.current();
+            if in_line_c {
+                if c == '\n' {
+                    in_line_c = false;
+                }
+                self.advance();
+                continue;
+            }
+            if in_block_c {
+                if c == '*' && self.peek_next() == Some('/') {
+                    self.advance();
+                    self.advance();
+                    in_block_c = false;
+                } else {
+                    self.advance();
+                }
+                continue;
+            }
+            if in_str {
+                if c == '\\' {
+                    self.advance();
+                    if self.pos < self.input.len() {
+                        self.advance();
+                    }
+                } else if c == '"' {
+                    in_str = false;
+                    self.advance();
+                } else {
+                    self.advance();
+                }
+                continue;
+            }
+            if in_raw {
+                if c == '`' {
+                    in_raw = false;
+                }
+                self.advance();
+                continue;
+            }
+            if in_char {
+                if c == '\\' {
+                    self.advance();
+                    if self.pos < self.input.len() {
+                        self.advance();
+                    }
+                } else if c == '\'' {
+                    in_char = false;
+                    self.advance();
+                } else {
+                    self.advance();
+                }
+                continue;
+            }
+            match c {
+                '/' if self.peek_next() == Some('/') => {
+                    in_line_c = true;
+                    self.advance();
+                }
+                '/' if self.peek_next() == Some('*') => {
+                    in_block_c = true;
+                    self.advance();
+                    self.advance();
+                }
+                '"' => {
+                    in_str = true;
+                    self.advance();
+                }
+                '`' => {
+                    in_raw = true;
+                    self.advance();
+                }
+                '\'' => {
+                    in_char = true;
+                    self.advance();
+                }
+                '{' => {
+                    depth += 1;
+                    self.advance();
+                }
+                '}' => {
+                    self.advance();
+                    depth -= 1;
+                    if depth == 0 {
+                        let inner: String = self.input[start + 1..self.pos - 1].iter().collect();
+                        return Ok(TokenKind::GoBlock(inner.trim().to_string()));
+                    }
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        Err(LexError {
+            message: "bloco go não fechado: falta '}'".into(),
+            span: self.span(),
+        })
     }
 
     fn current(&self) -> char {
@@ -510,5 +726,102 @@ route GET /hello {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn test_go_import() {
+        let tokens = lex(r#"go "lib/x.go" as x"#);
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Go,
+                TokenKind::Str("lib/x.go".into()),
+                TokenKind::As,
+                TokenKind::Ident("x".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_go_block() {
+        let tokens = lex("go {\n    func a() string {\n        return \"a\"\n    }\n}\n");
+        assert_eq!(tokens.len(), 2, "esperado GoBlock + Eof, veio: {:?}", tokens);
+        match &tokens[0] {
+            TokenKind::GoBlock(src) => {
+                assert!(src.contains("func a() string"));
+                assert!(src.contains("return \"a\""));
+            }
+            other => panic!("esperado GoBlock, veio {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_go_block_ignora_chaves_em_strings_e_comentarios() {
+        // chaves dentro de strings, raw strings e comentários não fecham o bloco
+        let tokens = lex(
+            "go {\n\tfunc f() string { return \"}\" + `{` } // fecha: }\n\t/* ainda aberto } aqui */\n}\n",
+        );
+        assert_eq!(tokens.len(), 2, "esperado GoBlock + Eof, veio: {:?}", tokens);
+        match &tokens[0] {
+            TokenKind::GoBlock(src) => {
+                assert!(src.contains("func f() string"));
+                assert!(src.contains("// fecha: }"));
+                assert!(src.contains("/* ainda aberto } aqui */"));
+            }
+            other => panic!("esperado GoBlock, veio {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_go_block_com_espaco_e_comentario() {
+        // go seguido de comentário antes de { também é bloco
+        let tokens = lex("go // helper\n{\nfunc a() {}\n}\n");
+        match &tokens[0] {
+            TokenKind::GoBlock(src) => assert_eq!(src.trim(), "func a() {}"),
+            other => panic!("esperado GoBlock, veio {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_go_ident_nao_e_bloco() {
+        // "gorilla" e "go_" não são bloco go
+        let tokens = lex("gorilla go_x");
+        assert_eq!(
+            tokens,
+            vec![
+                TokenKind::Ident("gorilla".into()),
+                TokenKind::Ident("go_x".into()),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_go_block_nao_fechado_erro() {
+        let err = Lexer::new("go {\nfunc a() {}").tokenize().unwrap_err();
+        assert!(err.message.contains("não fechado"));
+    }
+
+    #[test]
+    fn test_go_import_seguido_de_go_block() {
+        // regressão: go import antes de um go block quebrava a captura do bloco
+        let tokens = lex("go \"lib/x.go\" as x\n\ngo {\nfunc f() int { return 1 }\n}\n");
+        assert_eq!(tokens.len(), 6, "esperado Go, Str, As, Ident, GoBlock, Eof → veio: {:?}", tokens);
+        match &tokens[4] {
+            TokenKind::GoBlock(src) => assert!(src.contains("func f() int")),
+            other => panic!("esperado GoBlock no índice 4, veio {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_go_block_crlf() {
+        // arquivos Windows com \r\n
+        let tokens = lex("go \"lib/x.go\" as x\r\n\r\ngo {\r\n    func f() int {\r\n        return 1\r\n    }\r\n}\r\n");
+        assert_eq!(tokens.len(), 6, "veio: {:?}", tokens);
+        match &tokens[4] {
+            TokenKind::GoBlock(src) => assert!(src.contains("func f() int")),
+            other => panic!("esperado GoBlock no índice 4, veio {:?}", other),
+        }
     }
 }

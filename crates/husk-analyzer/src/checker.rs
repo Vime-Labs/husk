@@ -1,6 +1,7 @@
 use crate::scope::{FnSignature, Scope, SemanticError, Symbol, TypeInfo};
 use husk_lexer::Span;
 use husk_parser::ast::*;
+use std::collections::HashSet;
 
 /// Contexto de análise — em que tipo de bloco estamos
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,6 +15,8 @@ enum Ctx {
 pub struct Checker {
     global: Scope,
     errors: Vec<SemanticError>,
+    /// Nomes de funções declaradas em blocos `go { ... }` (extraídos por varredura leve)
+    go_fns: HashSet<String>,
 }
 
 impl Checker {
@@ -227,6 +230,7 @@ impl Checker {
         Self {
             global,
             errors: Vec::new(),
+            go_fns: HashSet::new(),
         }
     }
 
@@ -300,9 +304,18 @@ impl Checker {
                 Item::Import(imp) => {
                     let _ = self.global.declare(&imp.alias, Symbol::Module, &imp.span);
                 }
+                Item::GoImport(g) => {
+                    // alias de arquivo Go — chamável via alias.metodo()
+                    let _ = self.global.declare(&g.alias, Symbol::Module, &g.span);
+                }
+                Item::GoBlock(b) => {
+                    // funções top-level do bloco Go são chamáveis diretamente
+                    for name in extract_go_func_names(&b.source) {
+                        self.go_fns.insert(name);
+                    }
+                }
                 Item::RouteDef(_) => {} // rotas são verificadas na segunda passada
                 Item::CorsDef(_) => {}
-                _ => {}
             }
         }
     }
@@ -688,9 +701,18 @@ impl Checker {
             _ => {}
         }
 
+        // Funções declaradas em blocos go { ... }: sem assinatura conhecida —
+        // a verificação de tipos fica com o compilador Go.
+        if self.go_fns.contains(&fn_name) {
+            return Some(TypeInfo::Unknown);
+        }
+
         match scope.lookup(&fn_name) {
             Some(Symbol::Function(sig)) => {
-                if call.args.len() != sig.params.len() {
+                // require_field/require_role aceitam um argumento opcional (mensagem)
+                let optional_msg = matches!(fn_name.as_str(), "require_field" | "require_role")
+                    && call.args.len() == sig.params.len() + 1;
+                if call.args.len() != sig.params.len() && !optional_msg {
                     self.errors.push(SemanticError::new(
                         format!(
                             "'{}' espera {} argumento(s), recebeu {}",
@@ -1027,4 +1049,48 @@ fn return_types_from_ast(rt: &ReturnType) -> Vec<TypeInfo> {
         ReturnType::Single(t) => vec![TypeInfo::from_ast(t)],
         ReturnType::Tuple(types) => types.iter().map(|t| TypeInfo::from_ast(t)).collect(),
     }
+}
+
+/// Varredura leve do source de um bloco `go { ... }`: extrai nomes de funções
+/// top-level (`func Nome(...)`), ignorando métodos (`func (x T) Nome(...)`).
+/// É uma heurística — a verificação de tipos real fica com o compilador Go.
+fn extract_go_func_names(source: &str) -> Vec<String> {
+    let chars: Vec<char> = source.chars().collect();
+    let mut names = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        // procura a palavra "func" com fronteira de identificador
+        if chars[i] == 'f'
+            && i + 3 < chars.len()
+            && chars[i + 1] == 'u'
+            && chars[i + 2] == 'n'
+            && chars[i + 3] == 'c'
+            && (i + 4 >= chars.len()
+                || !(chars[i + 4].is_alphanumeric() || chars[i + 4] == '_'))
+        {
+            // pula espaços e "func"
+            let mut j = i + 4;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            // método: func (x T) Nome — pula a declaração inteira
+            if j < chars.len() && chars[j] == '(' {
+                i = j;
+                continue;
+            }
+            // lê o nome: suporta genéricos (func Nome[T any](...) → Nome)
+            let mut name = String::new();
+            while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                name.push(chars[j]);
+                j += 1;
+            }
+            if !name.is_empty() && !name.starts_with(|c: char| c.is_ascii_digit()) {
+                names.push(name);
+            }
+            i = j;
+            continue;
+        }
+        i += 1;
+    }
+    names
 }
