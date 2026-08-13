@@ -108,7 +108,7 @@ impl Checker {
 
         // String built-ins
         let strings: &[(&str, &[(TypeInfo, &str)], &[TypeInfo])] = &[
-            ("len", &[(TypeInfo::String, "s")], &[TypeInfo::Int]),
+            ("len", &[(TypeInfo::Unknown, "s")], &[TypeInfo::Int]),
             (
                 "contains",
                 &[(TypeInfo::String, "s"), (TypeInfo::String, "sub")],
@@ -485,7 +485,7 @@ impl Checker {
                 let collection_ty = self.check_expr(&f.collection, scope, ctx);
                 let item_ty = match &collection_ty {
                     TypeInfo::List(inner) => *inner.clone(),
-                    TypeInfo::Map => TypeInfo::String,
+                    TypeInfo::Map => TypeInfo::Unknown,
                     TypeInfo::Unknown => TypeInfo::Unknown,
                     _ => {
                         self.errors.push(SemanticError::new(
@@ -564,6 +564,12 @@ impl Checker {
             Expr::Unary(op, e) => self.check_unary(op, e, scope, ctx),
             Expr::MapLit(_) => TypeInfo::Map,
             Expr::StructInit(s) => self.check_struct_init(s, scope, ctx),
+            Expr::ListLit(items) => {
+                for item in items {
+                    self.check_expr(item, scope, ctx);
+                }
+                TypeInfo::List(Box::new(TypeInfo::Unknown))
+            }
             Expr::Try(t) => {
                 // expr? — valida contexto e retorna tipo interno
                 if ctx != Ctx::Route && ctx != Ctx::Middleware {
@@ -674,10 +680,11 @@ impl Checker {
             }
             "string" => return Some(TypeInfo::String),
             "json_parse" | "obj_get" | "body_raw" => return Some(TypeInfo::Unknown),
-            "json_parse_obj" | "body_obj" => return Some(TypeInfo::Map),
-            "json_parse_arr" | "body_arr" => {
+            "json_parse_obj" | "body_obj" | "to_map" => return Some(TypeInfo::Map),
+            "json_parse_arr" | "body_arr" | "to_list" | "append" => {
                 return Some(TypeInfo::List(Box::new(TypeInfo::Unknown)))
             }
+            "num" => return Some(TypeInfo::Float),
             _ => {}
         }
 
@@ -952,7 +959,7 @@ impl Checker {
     // ---- Helpers de tipo ----
 
     fn check_type_compat(&mut self, expected: &TypeInfo, got: &TypeInfo, span: &Span) {
-        if matches!(got, TypeInfo::Unknown) {
+        if matches!(got, TypeInfo::Unknown) || matches!(expected, TypeInfo::Unknown) {
             return;
         }
         if expected != got {

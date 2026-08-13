@@ -291,6 +291,8 @@ pub enum Expr {
     Unary(UnaryOp, Box<Expr>),
     MapLit(MapLit),
     StructInit(StructInit),
+    /// [a, b, c] — literal de lista (vira []interface{} no Go)
+    ListLit(Vec<Expr>),
     /// expr? [status] ["msg"]  — try operator
     Try(TryExpr),
     /// expr...  — spread: desestrutura map/array em argumentos

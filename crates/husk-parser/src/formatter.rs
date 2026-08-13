@@ -486,6 +486,16 @@ fn format_expr(expr: &Expr, out: &mut String) {
             }
             out.push_str(" }");
         }
+        Expr::ListLit(items) => {
+            out.push_str("[ ");
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                format_expr(item, out);
+            }
+            out.push_str(" ]");
+        }
         Expr::Try(try_expr) => {
             format_expr(&try_expr.expr, out);
             out.push('?');

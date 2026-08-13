@@ -485,6 +485,11 @@ func __husk_to_list(v interface{}) []interface{} {
                 self.go_imports.borrow_mut().insert("encoding/json".into());
             }
             Expr::Spread(e) => self.scan_expr_imports(e),
+            Expr::ListLit(items) => {
+                for item in items {
+                    self.scan_expr_imports(item);
+                }
+            }
             _ => {}
         }
     }
@@ -1175,6 +1180,15 @@ func __husk_to_list(v interface{}) []interface{} {
                 }
             }
         }
+        // Atribuição em índice: m["k"] = v ou lst[i] = v.
+        // (gen_index devolve fmt.Sprintf(...), que não é endereçável —
+        //  precisa do caminho especial para gerar obj[idx] = val.)
+        if let Expr::Index(obj, idx) = a.target.as_ref() {
+            let obj_go = self.gen_expr(obj, ctx)?;
+            let idx_go = self.gen_expr(idx, ctx)?;
+            let val_go = self.gen_expr(&a.value, ctx)?;
+            return Ok(format!("{}[{}] = {}", obj_go, idx_go, val_go));
+        }
         // Fallback: geração genérica
         let target = self.gen_expr(&a.target, ctx)?;
         let val = self.gen_expr(&a.value, ctx)?;
@@ -1462,6 +1476,14 @@ func __husk_to_list(v interface{}) []interface{} {
             }
             Expr::MapLit(m) => self.gen_map_lit(m, ctx),
             Expr::StructInit(s) => self.gen_struct_init(s, ctx),
+            Expr::ListLit(items) => {
+                let elems = items
+                    .iter()
+                    .map(|e| self.gen_expr(e, ctx))
+                    .collect::<Result<Vec<_>, CodegenError>>()?
+                    .join(", ");
+                Ok(format!("[]interface{{}}{{{}}}", elems))
+            }
             Expr::Try(t) => self.gen_try_expr(t, ctx),
             Expr::Spread(e) => self.gen_expr(e, ctx),
         }
@@ -2012,6 +2034,24 @@ func __husk_to_list(v interface{}) []interface{} {
                         self.gen_expr(k, ctx)?
                     ));
                 }
+                "to_list" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("to_list() requer um argumento")
+                    })?;
+                    return Ok(format!("__husk_to_list({})", self.gen_expr(arg, ctx)?));
+                }
+                "to_map" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("to_map() requer um argumento")
+                    })?;
+                    return Ok(format!("__husk_to_map({})", self.gen_expr(arg, ctx)?));
+                }
+                "num" => {
+                    let arg = call.args.first().ok_or_else(|| {
+                        CodegenError::new("num() requer um argumento")
+                    })?;
+                    return Ok(format!("__husk_to_float({})", self.gen_expr(arg, ctx)?));
+                }
                 "body_obj" => {
                     let k = call.args.first().ok_or_else(|| {
                         CodegenError::new("body_obj() requer a chave do campo")
@@ -2279,8 +2319,9 @@ fn expr_uses_ident(expr: &Expr, name: &str) -> bool {
         Expr::Index(o, i) => expr_uses_ident(o, name) || expr_uses_ident(i, name),
         Expr::BinOp(l, _, r) => expr_uses_ident(l, name) || expr_uses_ident(r, name),
         Expr::Unary(_, e) => expr_uses_ident(e, name),
-        Expr::MapLit(_) => false,
-        Expr::StructInit(_) => false,
+        Expr::MapLit(m) => m.fields.iter().any(|(_, v)| expr_uses_ident(v, name)),
+        Expr::StructInit(s) => s.fields.iter().any(|(_, v)| expr_uses_ident(v, name)),
+        Expr::ListLit(items) => items.iter().any(|e| expr_uses_ident(e, name)),
         Expr::Try(t) => expr_uses_ident(&t.expr, name),
         Expr::Spread(e) => expr_uses_ident(e, name),
         Expr::Lit(_) | Expr::Nil => false,
@@ -2329,6 +2370,9 @@ fn expr_uses_body_raw(expr: &Expr) -> bool {
         Expr::Unary(_, e) => expr_uses_body_raw(e),
         Expr::Try(t) => expr_uses_body_raw(&t.expr),
         Expr::Spread(e) => expr_uses_body_raw(e),
+        Expr::MapLit(m) => m.fields.iter().any(|(_, v)| expr_uses_body_raw(v)),
+        Expr::ListLit(items) => items.iter().any(expr_uses_body_raw),
+        Expr::StructInit(s) => s.fields.iter().any(|(_, v)| expr_uses_body_raw(v)),
         _ => false,
     }
 }
@@ -2387,6 +2431,9 @@ fn expr_uses_body(expr: &Expr) -> bool {
         Expr::Unary(_, e) => expr_uses_body(e),
         Expr::Try(t) => expr_uses_body(&t.expr),
         Expr::Spread(e) => expr_uses_body(e),
+        Expr::MapLit(m) => m.fields.iter().any(|(_, v)| expr_uses_body(v)),
+        Expr::ListLit(items) => items.iter().any(expr_uses_body),
+        Expr::StructInit(s) => s.fields.iter().any(|(_, v)| expr_uses_body(v)),
         _ => false,
     }
 }

@@ -927,6 +927,18 @@ impl Parser {
                 self.expect(TokenKind::RBrace)?;
                 Ok(Expr::MapLit(MapLit { fields }))
             }
+            TokenKind::LBracket => {
+                self.advance();
+                let mut items = Vec::new();
+                while !matches!(self.current_kind(), TokenKind::RBracket | TokenKind::Eof) {
+                    items.push(self.parse_expr()?);
+                    if matches!(self.current_kind(), TokenKind::Comma) {
+                        self.advance();
+                    }
+                }
+                self.expect(TokenKind::RBracket)?;
+                Ok(Expr::ListLit(items))
+            }
             _ => Err(ParseError::new(
                 format!("expressão inesperada: {:?}", self.current_kind()),
                 self.current_span(),
