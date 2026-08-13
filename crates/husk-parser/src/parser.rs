@@ -505,7 +505,15 @@ impl Parser {
                     self.advance();
                     segments.push(PathSegment::Literal(lit));
                 }
-                _ => break,
+                // Palavras-chave podem ser segmentos literais de rota (ex: /next/:cardId)
+                other => {
+                    if let Some(kw) = other.keyword_name() {
+                        self.advance();
+                        segments.push(PathSegment::Literal(kw.to_string()));
+                    } else {
+                        break;
+                    }
+                }
             }
         }
         Ok(RoutePath { segments })

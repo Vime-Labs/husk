@@ -230,13 +230,23 @@ func __husk_to_list(v interface{}) []interface{} {
     fn collect_go_imports(&mut self, program: &Program) {
         self.go_imports.borrow_mut().insert("context".into());
         self.go_imports.borrow_mut().insert("fmt".into());
-        self.go_imports.borrow_mut().insert("io".into());
         self.go_imports.borrow_mut().insert("log".into());
         self.go_imports.borrow_mut().insert("net/http".into());
         self.go_imports.borrow_mut().insert("os/signal".into());
         self.go_imports.borrow_mut().insert("syscall".into());
         // __husk_json_parse* helpers always emitted → json sempre usado
         self.go_imports.borrow_mut().insert("encoding/json".into());
+
+        let has_body_routes = program.items.iter().any(|i| {
+            if let Item::RouteDef(r) = i {
+                block_uses_body(&r.body)
+            } else {
+                false
+            }
+        });
+        if has_body_routes {
+            self.go_imports.borrow_mut().insert("io".into());
+        }
 
         let has_routes = program.items.iter().any(|i| matches!(i, Item::RouteDef(_)));
         if has_routes {
@@ -2246,7 +2256,8 @@ fn stmt_uses_ident(stmt: &Stmt, name: &str) -> bool {
             expr_uses_ident(&f.collection, name) || block_uses_ident(&f.body, name)
         }
         Stmt::If(i) => {
-            block_uses_ident(&i.then_block, name)
+            expr_uses_ident(&i.condition, name)
+                || block_uses_ident(&i.then_block, name)
                 || i.else_block.as_ref().map_or(false, |b| block_uses_ident(b, name))
         }
         Stmt::TryLet(t) => expr_uses_ident(&t.call, name),
@@ -2291,7 +2302,9 @@ fn stmt_uses_body_raw(stmt: &Stmt) -> bool {
         Stmt::Expr(e) => expr_uses_body_raw(e),
         Stmt::ForIn(f) => expr_uses_body_raw(&f.collection) || block_uses_body_raw(&f.body),
         Stmt::If(i) => {
-            block_uses_body_raw(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body_raw)
+            expr_uses_body_raw(&i.condition)
+                || block_uses_body_raw(&i.then_block)
+                || i.else_block.as_ref().map_or(false, block_uses_body_raw)
         }
         Stmt::TryLet(t) => expr_uses_body_raw(&t.call),
         Stmt::TryCatch(tc) => block_uses_body_raw(&tc.try_block) || block_uses_body_raw(&tc.catch_block),
@@ -2328,7 +2341,9 @@ fn stmt_uses_body(stmt: &Stmt) -> bool {
         Stmt::Expr(e) => expr_uses_body(e),
         Stmt::ForIn(f) => expr_uses_body(&f.collection) || block_uses_body(&f.body),
         Stmt::If(i) => {
-            block_uses_body(&i.then_block) || i.else_block.as_ref().map_or(false, block_uses_body)
+            expr_uses_body(&i.condition)
+                || block_uses_body(&i.then_block)
+                || i.else_block.as_ref().map_or(false, block_uses_body)
         }
         Stmt::TryLet(t) => expr_uses_body(&t.call),
         Stmt::TryCatch(tc) => block_uses_body(&tc.try_block) || block_uses_body(&tc.catch_block),
