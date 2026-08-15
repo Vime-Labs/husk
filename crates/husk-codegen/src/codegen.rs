@@ -2185,7 +2185,14 @@ fn gen_lit(lit: &Lit) -> String {
                 format!("{}", f)
             }
         }
-        Lit::Str(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+        Lit::Str(s) => format!(
+            "\"{}\"",
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t")
+        ),
         Lit::Bool(b) => b.to_string(),
     }
 }
