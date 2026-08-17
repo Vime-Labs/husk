@@ -5,11 +5,27 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/url"
 	"os"
 	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// maskDSN esconde usuário/senha do DATABASE_URL para logar com segurança
+// (host/porta/db seguem visíveis — úteis para confirmar qual banco o
+// processo está tentando alcançar).
+func maskDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***"
+	}
+	if u.User != nil {
+		u.User = url.User("***")
+	}
+	return u.String()
+}
 
 func toUUIDString(b [16]byte) string {
 	var buf [36]byte
@@ -57,21 +73,32 @@ var pgPool *pgxpool.Pool
 var pgOnce sync.Once
 
 func init() {
-	url := os.Getenv("DATABASE_URL")
-	if url == "" {
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Printf("[ERROR] husk/postgres: DATABASE_URL não definida no ambiente — o processo vai subir sem conexão com o banco")
 		return
 	}
-	if err := db_connect(url); err != nil {
-		fmt.Printf("husk/postgres: erro ao conectar: %v\n", err)
+	if err := db_connect(dsn); err != nil {
+		log.Printf("[ERROR] husk/postgres: erro ao conectar em %s: %v", maskDSN(dsn), err)
+		return
 	}
+	log.Printf("[INFO] husk/postgres: pool criado para %s", maskDSN(dsn))
 }
 
-func db_connect(url string) error {
+func db_connect(dsn string) error {
 	var connectErr error
 	pgOnce.Do(func() {
-		pool, err := pgxpool.New(context.Background(), url)
+		pool, err := pgxpool.New(context.Background(), dsn)
 		if err != nil {
 			connectErr = err
+			return
+		}
+		// pgxpool.New não conecta de fato (lazy) — Ping força uma conexão
+		// real agora, pra pegar erro de rede/DNS/credenciais no boot em vez
+		// de só na primeira query de algum request.
+		if err := pool.Ping(context.Background()); err != nil {
+			connectErr = err
+			pool.Close()
 			return
 		}
 		pgPool = pool
@@ -81,10 +108,13 @@ func db_connect(url string) error {
 
 func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error) {
 	if pgPool == nil {
-		return nil, fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
+		err := fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
+		log.Printf("[ERROR] %v — query: %s", err, sql)
+		return nil, err
 	}
 	rows, err := pgPool.Query(context.Background(), sql, args...)
 	if err != nil {
+		log.Printf("[ERROR] husk/postgres: query falhou (%v) — sql: %s", err, sql)
 		return nil, err
 	}
 	defer rows.Close()
@@ -93,6 +123,7 @@ func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error)
 	for rows.Next() {
 		values, err := rows.Values()
 		if err != nil {
+			log.Printf("[ERROR] husk/postgres: erro lendo linha (%v) — sql: %s", err, sql)
 			return nil, err
 		}
 		row := make(map[string]interface{})
@@ -101,7 +132,11 @@ func db_query(sql string, args ...interface{}) ([]map[string]interface{}, error)
 		}
 		results = append(results, row)
 	}
-	return results, rows.Err()
+	if err := rows.Err(); err != nil {
+		log.Printf("[ERROR] husk/postgres: erro após iterar linhas (%v) — sql: %s", err, sql)
+		return nil, err
+	}
+	return results, nil
 }
 
 func db_query_one(sql string, args ...interface{}) (map[string]interface{}, error) {
@@ -117,8 +152,13 @@ func db_query_one(sql string, args ...interface{}) (map[string]interface{}, erro
 
 func db_exec(sql string, args ...interface{}) (interface{}, error) {
 	if pgPool == nil {
-		return nil, fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
+		err := fmt.Errorf("husk/postgres: sem conexão. Defina DATABASE_URL ou chame db.connect(url)")
+		log.Printf("[ERROR] %v — exec: %s", err, sql)
+		return nil, err
 	}
 	_, err := pgPool.Exec(context.Background(), sql, args...)
+	if err != nil {
+		log.Printf("[ERROR] husk/postgres: exec falhou (%v) — sql: %s", err, sql)
+	}
 	return nil, err
 }
